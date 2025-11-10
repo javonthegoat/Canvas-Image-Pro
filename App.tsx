@@ -1,4 +1,5 @@
 
+
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { CanvasWrapper } from './components/CanvasWrapper';
@@ -426,19 +427,23 @@ const App: React.FC = () => {
   
   const handleSelectImage = useCallback((id: string | null, multiSelect = false) => {
     setAppState(prev => {
-      let newSelection: string[];
-      if (id === null) {
-          newSelection = [];
-      } else if (multiSelect) {
-          if (prev.selectedImageIds.includes(id)) {
-              newSelection = prev.selectedImageIds.filter(prevId => prevId !== id);
-          } else {
-              newSelection = [...prev.selectedImageIds, id];
-          }
-      } else {
-          newSelection = [id];
+      // If we are selecting an image, clear annotation selection.
+      if (id !== null) {
+        let newSelection: string[];
+        if (multiSelect) {
+            if (prev.selectedImageIds.includes(id)) {
+                newSelection = prev.selectedImageIds.filter(prevId => prevId !== id);
+            } else {
+                newSelection = [...prev.selectedImageIds, id];
+            }
+        } else {
+            newSelection = [id];
+        }
+        return { ...prev, selectedImageIds: newSelection, selectedAnnotations: [] };
       }
-      return { ...prev, selectedImageIds: newSelection, selectedAnnotations: [] };
+      
+      // If id is null, we are just clearing image selection. Don't touch annotations.
+      return { ...prev, selectedImageIds: [] };
     });
   }, []);
 
