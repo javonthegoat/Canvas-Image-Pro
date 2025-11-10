@@ -1,0 +1,5 @@
+{
+  "name": "Canvas Image Pro",
+  "description": "An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.",
+  "requestFramePermissions": []
+}
