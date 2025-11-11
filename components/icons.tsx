@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 
 const Icon: React.FC<{ children: React.ReactNode, className?: string }> = ({ children, className }) => (
@@ -141,6 +142,45 @@ export const ArrangeVerticalIcon: React.FC<{ className?: string }> = ({ classNam
     <Icon className={className}><rect x="8" y="3" width="8" height="5" rx="1" /><rect x="8" y="9.5" width="8" height="5" rx="1" /><rect x="8" y="16" width="8" height="5" rx="1" /></Icon>
 );
 
+export const StackHorizontalIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}>
+        <rect x="2" y="7" width="4" height="10" rx="1" />
+        <rect x="7" y="7" width="4" height="10" rx="1" />
+        <rect x="12" y="7" width="4" height="10" rx="1" />
+        <rect x="17" y="7" width="4" height="10" rx="1" />
+    </Icon>
+);
+
+export const StackVerticalIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}>
+        <rect x="7" y="2" width="10" height="4" rx="1" />
+        <rect x="7" y="7" width="10" height="4" rx="1" />
+        <rect x="7" y="12" width="10" height="4" rx="1" />
+        <rect x="7" y="17" width="10" height="4" rx="1" />
+    </Icon>
+);
+
+export const DistributeHorizontalIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}>
+      <path d="M15 5H9a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+      <path d="M5 5H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+      <path d="M20 5h-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+    </Icon>
+);
+export const DistributeVerticalIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}>
+        <path d="M5 15v-6a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+        <path d="M5 5V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+        <path d="M5 20v-1a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+    </Icon>
+);
+export const MatchWidthIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}><rect x="3" y="3" width="8" height="18" rx="1" /><rect x="13" y="7" width="8" height="10" rx="1" /></Icon>
+);
+export const MatchHeightIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}><rect x="3" y="3" width="18" height="8" rx="1" /><rect x="7" y="13" width="10" height="8" rx="1" /></Icon>
+);
+
 export const MaximizeIcon: React.FC<{ className?: string }> = ({ className }) => (
   <Icon className={className}>
     <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
@@ -159,4 +199,8 @@ export const FolderOpenIcon: React.FC<{ className?: string }> = ({ className }) 
   <Icon className={className}>
     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
   </Icon>
+);
+
+export const LayersIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></Icon>
 );

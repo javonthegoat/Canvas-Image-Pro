@@ -1,5 +1,7 @@
 
 
+
+
 export interface Point {
   x: number;
   y: number;
@@ -101,6 +103,14 @@ export interface CanvasImage {
   originalWidth: number;
   originalHeight: number;
   cropRect: Rect | null;
+  groups?: Group[];
 }
 
 export type AspectRatio = 'free' | '1:1' | '4:3' | '16:9';
+
+export interface Group {
+  id: string;
+  name: string;
+  imageIds: string[];
+  isExpanded: boolean;
+}

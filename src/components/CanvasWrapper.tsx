@@ -35,6 +35,7 @@ interface CanvasWrapperProps {
   onMoveCanvasAnnotations: (delta: Point) => void;
   onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
   reparentImageAnnotationsToImage: (annotations: Array<{ annotationId: string; imageId: string }>, newImageId: string) => void;
+  // FIX: Added missing onMoveSelectedImages prop.
   onMoveSelectedImages: (delta: Point) => void;
 }
 

@@ -1,3 +1,4 @@
+
 import { CanvasImage, Rect, Point, Annotation, TextAnnotation, Group } from '../types';
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -40,6 +41,7 @@ export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   if (maxX < minX || maxY < minY) return null;
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 };
+
 
 export const transformLocalToGlobal = (localPoint: Point, image: CanvasImage): Point => {
     const imgCenterX = image.x + (image.width * image.scale) / 2;

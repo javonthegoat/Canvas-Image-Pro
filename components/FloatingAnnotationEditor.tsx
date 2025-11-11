@@ -21,12 +21,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  // Create a stable dependency based on the IDs of the selected annotations.
-  // This ensures the position only resets when the selection actually changes,
-  // not when a property of a selected annotation is updated.
   const selectedAnnotationIds = useMemo(() => selectedAnnotations.map(a => a.id).sort().join(','), [selectedAnnotations]);
 
-  // Reset custom position when the selection changes, so it defaults to the calculated position
   useEffect(() => {
     setPosition(null);
   }, [selectedAnnotationIds]);
@@ -34,19 +30,9 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const editor = (ref as React.RefObject<HTMLDivElement>)?.current;
     if (!editor) return;
-
-    // Prevent default to avoid text selection while dragging
     e.preventDefault();
-    
     const rect = editor.getBoundingClientRect();
-    
-    // The key fix: Immediately set the position based on the current rendered position.
-    // This transitions it to a controlled `position: fixed` state without a visual jump.
-    setPosition({
-        top: rect.top,
-        left: rect.left,
-    });
-    
+    setPosition({ top: rect.top, left: rect.left });
     setIsDragging(true);
     setDragOffset({
       x: e.clientX - rect.left,
@@ -62,39 +48,30 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
         top: e.clientY - dragOffset.y,
       });
     };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
+    const handleMouseUp = () => setIsDragging(false);
 
     if (isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
-
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging, dragOffset]);
 
-  const finalStyle = useMemo(() => {
-    // If a custom position is set by dragging, use it.
+  const finalStyle = useMemo((): React.CSSProperties => {
     if (position) {
       return {
         ...style,
-        // Switch to fixed positioning and use the state for top/left.
         position: 'fixed',
         top: `${position.top}px`,
         left: `${position.left}px`,
-        // Remove the original transform to prevent conflicts.
         transform: 'none',
       };
     }
-    // Otherwise, use the calculated style from props.
     return style;
   }, [style, position]);
-
 
   const commonProps = useMemo(() => {
     if (selectedAnnotations.length === 0) return {};
@@ -129,12 +106,11 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
     return common;
   }, [selectedAnnotations]);
 
-  const hasFill = useMemo(() => selectedAnnotations.some(a => a.type === 'rect' || a.type === 'circle'), [selectedAnnotations]);
+  const hasGeometricProps = useMemo(() => selectedAnnotations.some(a => ['rect', 'circle', 'freehand', 'line', 'arrow'].includes(a.type)), [selectedAnnotations]);
   const hasTextProps = useMemo(() => selectedAnnotations.some(a => a.type === 'text'), [selectedAnnotations]);
-  const hasBackground = useMemo(() => selectedAnnotations.some(a => a.type === 'text'), [selectedAnnotations]);
-  const hasTextStroke = useMemo(() => selectedAnnotations.some(a => a.type === 'text'), [selectedAnnotations]);
-
+  const hasFill = useMemo(() => selectedAnnotations.some(a => a.type === 'rect' || a.type === 'circle'), [selectedAnnotations]);
   const isSingleTextAnnotation = useMemo(() => selectedAnnotations.length === 1 && selectedAnnotations[0].type === 'text', [selectedAnnotations]);
+  const isMixedStroke = useMemo(() => hasGeometricProps && hasTextProps, [hasGeometricProps, hasTextProps]);
 
   if (selectedAnnotations.length === 0) {
     return null;
@@ -163,6 +139,60 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
         </button>
       </div>
 
+      <ColorInput
+        label="Color"
+        color={commonProps.color === 'multi' ? '#ffffff' : commonProps.color}
+        showMixed={commonProps.color === 'multi'}
+        onChange={newColor => onUpdate({ color: newColor })}
+      />
+
+      {hasGeometricProps && (
+        <div className="pt-2 border-t border-gray-700 space-y-2">
+            <h4 className="text-xs font-bold uppercase text-gray-400">Shape Style</h4>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Border/Line Width ({isMixedStroke ? "N/A" : (commonProps.strokeWidth === 'multi' ? 'Mixed' : `${commonProps.strokeWidth}px`)})
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
+                onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
+                className="w-full"
+                disabled={commonProps.strokeWidth === 'multi' || isMixedStroke}
+                title={isMixedStroke ? "Cannot edit border width for mixed selection of shapes and text." : ""}
+              />
+            </div>
+            {hasFill && (
+              <>
+                <ColorInput
+                  label="Fill Color"
+                  color={commonProps.fillColor === 'multi' ? '#ffffff' : commonProps.fillColor}
+                  showMixed={commonProps.fillColor === 'multi'}
+                  onChange={newColor => onUpdate({ fillColor: newColor })}
+                  preventFocusSteal
+                />
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Fill Opacity ({commonProps.fillOpacity === 'multi' ? 'Mixed' : commonProps.fillOpacity})
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={commonProps.fillOpacity === 'multi' ? 0 : commonProps.fillOpacity}
+                    onChange={e => onUpdate({ fillOpacity: parseFloat(e.target.value) })}
+                    className="w-full"
+                    disabled={commonProps.fillOpacity === 'multi'}
+                  />
+                </div>
+              </>
+            )}
+        </div>
+      )}
+
       {isSingleTextAnnotation && (
         <div className="pt-2 border-t border-gray-700 space-y-2">
           <h4 className="text-xs font-bold uppercase text-gray-400">Text Content</h4>
@@ -171,123 +201,106 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
             onChange={(e) => onUpdate({ text: e.target.value })}
             rows={4}
             className="w-full bg-gray-900 text-sm text-gray-200 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 p-2"
-            // Prevent canvas-level keyboard shortcuts like backspace/delete from firing while typing
             onKeyDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()} // Also stop propagation for mousedown
+            onMouseDown={(e) => e.stopPropagation()}
           />
         </div>
       )}
-
-      <ColorInput
-        label="Color"
-        color={commonProps.color === 'multi' ? '#ffffff' : commonProps.color}
-        showMixed={commonProps.color === 'multi'}
-        onChange={newColor => onUpdate({ color: newColor })}
-      />
       
-      {!hasTextProps && (
-        <div>
-          <label className="block text-xs font-medium mb-1">
-            Border/Line Width ({commonProps.strokeWidth === 'multi' ? 'Mixed' : `${commonProps.strokeWidth}px`})
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="50"
-            value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
-            onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
-            className="w-full"
-          />
-        </div>
-      )}
-
-      {hasFill && (
-        <div className="pt-2 border-t border-gray-700 space-y-2">
-            <h4 className="text-xs font-bold uppercase text-gray-400">Fill</h4>
-             <ColorInput
-                label="Color"
-                color={commonProps.fillColor === 'multi' ? '#ffffff' : (commonProps.fillColor || '#ffffff')}
-                showMixed={commonProps.fillColor === 'multi'}
-                onChange={newColor => onUpdate({ fillColor: newColor })}
-            />
-            <div>
-                <label className="block text-xs font-medium mb-1">Opacity</label>
-                <input type="range" min="0" max="1" step="0.1" 
-                    value={commonProps.fillOpacity === 'multi' ? 0 : (commonProps.fillOpacity || 0)}
-                    onChange={e => onUpdate({ fillOpacity: parseFloat(e.target.value) })} className="w-full" />
-            </div>
-        </div>
-      )}
-
       {hasTextProps && (
         <div className="pt-2 border-t border-gray-700 space-y-2">
-             <h4 className="text-xs font-bold uppercase text-gray-400">Text</h4>
-            <div>
-                <label className="block text-xs font-medium mb-1">Font Size ({commonProps.fontSize === 'multi' ? 'Mixed' : `${commonProps.fontSize}px`})</label>
-                <input type="range" min="8" max="128" 
-                    value={commonProps.fontSize === 'multi' ? 32 : commonProps.fontSize}
-                    onChange={e => onUpdate({ fontSize: parseInt(e.target.value, 10) })} className="w-full" />
-            </div>
-             <div>
-                <label className="block text-xs font-medium mb-1">Font Family</label>
-                <select 
-                    value={commonProps.fontFamily === 'multi' ? '' : commonProps.fontFamily}
-                    onChange={e => onUpdate({ fontFamily: e.target.value })}
-                    className="w-full bg-gray-700 text-xs rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500"
-                >
-                    {commonProps.fontFamily === 'multi' && <option value="" disabled>Mixed</option>}
-                    <option>Arial</option><option>Verdana</option><option>Times New Roman</option><option>Courier New</option><option>Comic Sans MS</option>
-                </select>
-            </div>
-        </div>
-      )}
-
-      {hasBackground && (
-         <div className="pt-2 border-t border-gray-700 space-y-2">
-             <h4 className="text-xs font-bold uppercase text-gray-400">Background</h4>
-             <ColorInput
-                label="Color"
-                color={commonProps.backgroundColor === 'multi' ? '#ffffff' : (commonProps.backgroundColor || '#000000')}
-                showMixed={commonProps.backgroundColor === 'multi'}
-                onChange={newColor => onUpdate({ backgroundColor: newColor })}
+          <h4 className="text-xs font-bold uppercase text-gray-400">Text Style</h4>
+          <div>
+            <label className="block text-sm font-medium mb-1">Font Size ({commonProps.fontSize === 'multi' ? 'Mixed' : `${commonProps.fontSize}px`})</label>
+            <input
+              type="range"
+              min="8"
+              max="128"
+              value={commonProps.fontSize === 'multi' ? 32 : commonProps.fontSize}
+              onChange={e => onUpdate({ fontSize: parseInt(e.target.value, 10) })}
+              className="w-full"
+              disabled={commonProps.fontSize === 'multi'}
             />
-            <div>
-                <label className="block text-xs font-medium mb-1">Opacity</label>
-                <input type="range" min="0" max="1" step="0.1" 
-                    value={commonProps.backgroundOpacity === 'multi' ? 0 : (commonProps.backgroundOpacity || 0)}
-                    onChange={e => onUpdate({ backgroundOpacity: parseFloat(e.target.value) })} className="w-full" />
-            </div>
-        </div>
-      )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Font Family</label>
+            <select
+              value={commonProps.fontFamily === 'multi' ? '' : commonProps.fontFamily}
+              onChange={e => onUpdate({ fontFamily: e.target.value })}
+              className="w-full bg-gray-900 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500"
+              disabled={commonProps.fontFamily === 'multi'}
+            >
+              {commonProps.fontFamily === 'multi' && <option value="">Mixed</option>}
+              <option>Arial</option><option>Verdana</option><option>Times New Roman</option><option>Courier New</option><option>Comic Sans MS</option>
+            </select>
+          </div>
+          
+          <div className="pt-2 border-t border-gray-700 space-y-2">
+              <h4 className="text-xs font-bold uppercase text-gray-400">Text Background</h4>
+              <ColorInput
+                  label="BG Color"
+                  color={commonProps.backgroundColor === 'multi' ? '#ffffff' : commonProps.backgroundColor}
+                  showMixed={commonProps.backgroundColor === 'multi'}
+                  onChange={newColor => onUpdate({ backgroundColor: newColor })}
+                  preventFocusSteal
+              />
+              <div>
+                  <label className="block text-sm font-medium mb-1">
+                      BG Opacity ({commonProps.backgroundOpacity === 'multi' ? 'Mixed' : commonProps.backgroundOpacity})
+                  </label>
+                  <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={commonProps.backgroundOpacity === 'multi' ? 0 : commonProps.backgroundOpacity}
+                      onChange={e => onUpdate({ backgroundOpacity: parseFloat(e.target.value) })}
+                      className="w-full"
+                      disabled={commonProps.backgroundOpacity === 'multi'}
+                  />
+              </div>
+          </div>
 
-      {hasTextStroke && (
-         <div className="pt-2 border-t border-gray-700 space-y-2">
-             <h4 className="text-xs font-bold uppercase text-gray-400">Text Stroke</h4>
-             <ColorInput
-                label="Color"
-                color={commonProps.strokeColor === 'multi' ? '#ffffff' : (commonProps.strokeColor || '#000000')}
-                showMixed={commonProps.strokeColor === 'multi'}
-                onChange={newColor => onUpdate({ strokeColor: newColor })}
-            />
-            <div>
-                <label className="block text-xs font-medium mb-1">Opacity</label>
-                <input type="range" min="0" max="1" step="0.1" 
-                    value={commonProps.strokeOpacity === 'multi' ? 0 : (commonProps.strokeOpacity || 0)}
-                    onChange={e => onUpdate({ strokeOpacity: parseFloat(e.target.value) })} className="w-full" />
-            </div>
-             <div>
-                <label className="block text-xs font-medium mb-1">
-                    Width ({commonProps.strokeWidth === 'multi' ? 'Mixed' : `${commonProps.strokeWidth}px`})
-                </label>
-                <input
-                    type="range"
-                    min="0"
-                    max="20"
-                    value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
-                    onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
-                    className="w-full"
-                />
-            </div>
+          <div className="pt-2 border-t border-gray-700 space-y-2">
+              <h4 className="text-xs font-bold uppercase text-gray-400">Text Stroke</h4>
+              <ColorInput
+                  label="Stroke Color"
+                  color={commonProps.strokeColor === 'multi' ? '#ffffff' : commonProps.strokeColor}
+                  showMixed={commonProps.strokeColor === 'multi'}
+                  onChange={newColor => onUpdate({ strokeColor: newColor })}
+                  preventFocusSteal
+              />
+              <div>
+                  <label className="block text-sm font-medium mb-1">
+                      Stroke Opacity ({commonProps.strokeOpacity === 'multi' ? 'Mixed' : commonProps.strokeOpacity})
+                  </label>
+                  <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={commonProps.strokeOpacity === 'multi' ? 0 : commonProps.strokeOpacity}
+                      onChange={e => onUpdate({ strokeOpacity: parseFloat(e.target.value) })}
+                      className="w-full"
+                      disabled={commonProps.strokeOpacity === 'multi'}
+                  />
+              </div>
+              <div>
+                  <label className="block text-sm font-medium mb-1">
+                      Stroke Width ({isMixedStroke ? "N/A" : (commonProps.strokeWidth === 'multi' ? 'Mixed' : `${commonProps.strokeWidth}px`)})
+                  </label>
+                  <input
+                      type="range"
+                      min="0"
+                      max="20"
+                      value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
+                      onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
+                      className="w-full"
+                      disabled={commonProps.strokeWidth === 'multi' || isMixedStroke}
+                      title={isMixedStroke ? "Cannot edit stroke width for mixed selection of text and shapes." : ""}
+                  />
+              </div>
+          </div>
         </div>
       )}
     </div>
