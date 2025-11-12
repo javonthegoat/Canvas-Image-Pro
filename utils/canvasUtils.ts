@@ -8,7 +8,6 @@ function hexToRgba(hex: string, opacity: number): string {
     return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
-// FIX: Added missing getImagesBounds function.
 export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   if (imagesToBound.length === 0) return null;
 

@@ -1,5 +1,3 @@
-
-
 import React from 'react';
 
 const Icon: React.FC<{ children: React.ReactNode, className?: string }> = ({ children, className }) => (
@@ -103,6 +101,14 @@ export const ChevronUpIcon: React.FC<{ className?: string }> = ({ className }) =
   <Icon className={className}><polyline points="18 15 12 9 6 15" /></Icon>
 );
 
+export const ChevronsDownIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <Icon className={className}><polyline points="7 13 12 18 17 13" /><polyline points="7 6 12 11 17 6" /></Icon>
+);
+
+export const ChevronsUpIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <Icon className={className}><polyline points="17 11 12 6 7 11" /><polyline points="17 18 12 13 7 18" /></Icon>
+);
+
 export const SendToBackIcon: React.FC<{ className?: string }> = ({ className }) => (
   <Icon className={className}><rect x="5" y="4" width="10" height="10" rx="2" /><path d="M15 4v8h-8M19 8v8h-8" /></Icon>
 );
@@ -203,4 +209,18 @@ export const FolderOpenIcon: React.FC<{ className?: string }> = ({ className }) 
 
 export const LayersIcon: React.FC<{ className?: string }> = ({ className }) => (
     <Icon className={className}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></Icon>
+);
+
+export const SlidersIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}>
+      <line x1="4" y1="21" x2="4" y2="14" />
+      <line x1="4" y1="10" x2="4" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12" y2="3" />
+      <line x1="20" y1="21" x2="20" y2="16" />
+      <line x1="20" y1="12" x2="20" y2="3" />
+      <line x1="1" y1="14" x2="7" y2="14" />
+      <line x1="9" y1="8" x2="15" y2="8" />
+      <line x1="17" y1="16" x2="23" y2="16" />
+    </Icon>
 );

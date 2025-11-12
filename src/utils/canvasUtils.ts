@@ -9,7 +9,6 @@ function hexToRgba(hex: string, opacity: number): string {
     return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
-// FIX: Added missing getImagesBounds function.
 export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   if (imagesToBound.length === 0) return null;
 
@@ -41,7 +40,6 @@ export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   if (maxX < minX || maxY < minY) return null;
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 };
-
 
 export const transformLocalToGlobal = (localPoint: Point, image: CanvasImage): Point => {
     const imgCenterX = image.x + (image.width * image.scale) / 2;

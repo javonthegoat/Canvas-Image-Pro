@@ -2,7 +2,7 @@
 
 An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
-<img width="1921" height="910" alt="image" src="https://github.com/user-attachments/assets/74927064-0852-4f73-8f0c-2d68535d7ee5" />
+<!-- ![Canvas Image Pro Screenshot](path/to/screenshot.png) -->
 
 ## Key Features
 
@@ -15,6 +15,7 @@ An interactive web applet for advanced image manipulation, featuring an infinite
 ### Advanced Layering & Grouping
 - **Intuitive Layer List**: Manage all images and canvas-level annotations in a clear, hierarchical list.
 - **Drag & Drop Reordering**: Easily change the stacking order of images and groups by dragging them in the layer list.
+- **Full Layer Control**: Precisely reorder layers using 'Bring to Front', 'Send to Back', 'Move Forward', and 'Move Backward' controls.
 - **Image Grouping**: Select multiple images and group them into collapsible folders for streamlined organization and manipulation.
 
 ### Precise Transformations & Alignment
@@ -22,7 +23,7 @@ An interactive web applet for advanced image manipulation, featuring an infinite
 - **Image Outlines**: Add customizable outlines to any image.
 - **Multi-Image Alignment**: Select multiple images to:
     - **Align**: Align edges (left, right, top, bottom) or centers (horizontal, vertical).
-    - **Arrange**: Automatically place images in a smart grid layout.
+    - **Arrange**: Automatically place selected items in a smart grid that respects their layer order. Groups are treated as single blocks to keep your layouts tidy.
     - **Stack**: Arrange images edge-to-edge in a horizontal or vertical stack.
     - **Distribute**: Evenly space three or more images.
     - **Match Size**: Match the width or height of all selected images to the last one selected.
@@ -35,7 +36,7 @@ An interactive web applet for advanced image manipulation, featuring an infinite
     - **Eyedropper**: Quickly pick a color from anywhere on the canvas.
 - **Flexible Annotation Targets**: Annotations can be attached to a specific image (moving and scaling with it) or placed directly on the canvas.
 - **Annotation Re-parenting**: Seamlessly move an annotation from one image to another, or from the canvas to an image, via drag & drop in the layer list.
-- **Floating Property Editor**: A context-aware floating menu appears for selected annotations, allowing for quick edits to color, stroke, fill, opacity, text content, and more.
+- **Repositionable Floating Editor**: A context-aware floating menu appears for selected annotations, allowing for quick edits to color, stroke, fill, opacity, text content, and more. Drag the editor anywhere on screen to keep it out of your way.
 
 ### Non-Destructive Cropping
 - **Dynamic Crop Box**: Create a crop selection that can be moved and resized.
@@ -44,9 +45,9 @@ An interactive web applet for advanced image manipulation, featuring an infinite
 - **Copy to Clipboard**: Copy the contents of the crop area or selected images directly to the clipboard.
 - **Uncrop**: Revert a previously cropped image back to its original, uncropped state.
 
-### Project Management
+### Project Management & Export
 - **Save & Load**: Save your entire session (images, positions, annotations, groups) to a single `.cpro` JSON file and load it later to continue your work.
-- **Export**: Download all image layers on the canvas as individual PNG or JPEG files.
+- **Layer-Aware Export**: Download a single image, selected images, or all images on the canvas. When exporting multiple files as a ZIP archive, filenames are automatically prefixed with numbers to preserve the layer order from your project.
 - **Clear Canvas**: Reset the entire workspace with a single click.
 
 ## Keyboard Shortcuts
@@ -58,6 +59,7 @@ An interactive web applet for advanced image manipulation, featuring an infinite
 | Activate Crop Tool (Hold)   | `C`                                        |
 | Activate Pan Tool (Hold)    | `Spacebar`                                 |
 | Delete Selection            | `Delete` or `Backspace`                    |
+| Apply Crop (with selection) | `Enter`                                    |
 | Copy Selection/Crop Area    | `Ctrl/Cmd + C`                             |
 | Switch to Select Tool       | `S`                                        |
 | Switch to Eyedropper Tool   | `I`                                        |

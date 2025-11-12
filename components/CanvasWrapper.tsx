@@ -1,5 +1,4 @@
 
-
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
@@ -23,7 +22,7 @@ interface CanvasWrapperProps {
   setActiveTool: (tool: AnnotationTool) => void;
   toolOptions: { color: string; strokeWidth: number; fontSize: number; fontFamily: string; backgroundColor: string; backgroundOpacity: number; strokeColor: string; strokeOpacity: number; fillColor: string, fillOpacity: number, outlineColor: string, outlineWidth: number, outlineOpacity: number };
   addAnnotation: (imageId: string, annotation: Annotation) => void;
-  deleteAnnotation: () => void;
+  deleteSelectedAnnotations: () => void;
   viewTransform: { scale: number; offset: Point };
   setViewTransform: React.Dispatch<React.SetStateAction<{ scale: number; offset: Point }>>;
   selectedAnnotations: AnnotationSelection[];
@@ -104,6 +103,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   onReparentCanvasAnnotationsToImage,
   reparentImageAnnotationsToImage,
   onMoveSelectedImages,
+  deleteSelectedAnnotations,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -452,7 +452,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       }
     }
 
-    if (activeTool !== 'select' && activeTool !== 'eyedropper') {
+    // FIX: Removed redundant check for 'eyedropper' since it's handled at the start of the function.
+    if (activeTool !== 'select') {
       let targetImage: CanvasImage | undefined;
       if (selectedImageIds.length === 1) {
         targetImage = images.find(img => img.id === selectedImageIds[0]);
@@ -505,6 +506,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
             setInteraction({ mode: 'move-crop', startPoint: canvasPoint, initialCropArea: cropArea });
             return;
         }
+        // If click is outside crop area, clear it and continue processing the click
+        setCropArea(null);
     }
 
     if (activeTool === 'select') {
