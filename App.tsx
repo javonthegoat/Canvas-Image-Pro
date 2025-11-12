@@ -2,6 +2,8 @@
 
 
 
+
+
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { CanvasWrapper } from './components/CanvasWrapper';
@@ -1538,8 +1540,8 @@ const App: React.FC = () => {
                   (rest as any).groups = (rest.groups as any[]).map((g: any): Group => ({
                       id: typeof g.id === 'string' ? g.id : `group-${Date.now()}-${Math.random()}`,
                       name: typeof g.name === 'string' ? g.name : 'Untitled Group',
-// FIX: Cast imageIds to unknown[] to allow TypeScript to correctly infer the type after filtering.
-                      imageIds: Array.isArray(g.imageIds) ? (g.imageIds as unknown[]).filter((id: unknown): id is string => typeof id === 'string') : [],
+// FIX: Using a type guard on `any` to correctly filter and type the imageIds array.
+                      imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: any): id is string => typeof id === 'string') : [],
                       isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
                   }));
               }
@@ -1566,8 +1568,8 @@ const App: React.FC = () => {
           const sanitizedGroups: Group[] = Array.isArray(loadedGroups) ? loadedGroups.map((g: any): Group => ({
             id: typeof g.id === 'string' ? g.id : `group-${Date.now()}-${Math.random()}`,
             name: typeof g.name === 'string' ? g.name : 'Untitled Group',
-// FIX: Cast imageIds to unknown[] to allow TypeScript to correctly infer the type after filtering.
-            imageIds: Array.isArray(g.imageIds) ? (g.imageIds as unknown[]).filter((id: unknown): id is string => typeof id === 'string') : [],
+// FIX: Using a type guard on `any` to correctly filter and type the imageIds array.
+            imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: any): id is string => typeof id === 'string') : [],
             isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
           })) : [];
 
