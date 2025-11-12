@@ -2,7 +2,7 @@
 
 An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
-<!-- ![Canvas Image Pro Screenshot](path/to/screenshot.png) -->
+<img width="1921" height="910" alt="image" src="https://github.com/user-attachments/assets/74927064-0852-4f73-8f0c-2d68535d7ee5" />
 
 ## Key Features
 
