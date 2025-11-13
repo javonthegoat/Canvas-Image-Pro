@@ -14,7 +14,7 @@ This is an interactive web applet for advanced image manipulation, built by Goog
 
 ### Annotation Tools
 
-- **Line, Arrow, and Freehand Draw**: These tools have properties such as color, stroke/line width, outline color, outline opacity, and outline width.
+- **Line, Arrow, and Freehand Draw**: These tools have properties such as color, stroke/line width, outline color, outline opacity, and outline width. When placing arrows and lines, hold `Shift` while clicking and dragging to align them to different angles.
 - **Rectangle and Circle**: These tools have properties such as color, stroke/line width, fill color, and fill opacity.
 - **Text Tool**: Options to change text color, font size, font family, background color and opacity, stroke color, stroke opacity, and stroke thickness.
 - **Drag and Drop Annotations**: Drag and drop annotations from images in the layers panel into other images, or from the canvas onto images.
