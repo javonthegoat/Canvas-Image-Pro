@@ -2,7 +2,10 @@
 
 An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
-<!-- ![Canvas Image Pro Screenshot](path/to/screenshot.png) -->
+here is a preview of what can be done within this app. The images you see were dragged from pinterest and dropped onto the canvas.
+If you look at the layer stack in the bottom right you can see the references for the digital painting materials and faces are in separate groups.
+<img width="1920" height="911" alt="image" src="https://github.com/user-attachments/assets/7c9b552e-9dbe-4830-baa1-1d80b7db8c37" />
+
 
 ## Key Features
 
