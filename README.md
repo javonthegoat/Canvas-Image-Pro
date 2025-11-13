@@ -2,6 +2,10 @@
 
 This is an interactive web applet for advanced image manipulation, built by Google AI Studio. It features an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
+Here is a small preview of what you can use this app for. If you look at the bottom right corner you can see I grouped the references into
+two groups faces and materials. I got the digital painting references from pinterest.
+<img width="1920" height="911" alt="image" src="https://github.com/user-attachments/assets/d73dc4bf-5043-4d0e-ac73-3ea0e3910fc1" />
+
 ## Features
 
 ### Selection and Manipulation
