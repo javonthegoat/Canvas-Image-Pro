@@ -1997,8 +1997,10 @@ const App: React.FC = () => {
                   handleCopyToClipboard();
               }
           } else if (e.key.toLowerCase() === 'v' && !isEditingText) {
-            e.preventDefault();
-            handlePaste();
+            if (clipboard) {
+              e.preventDefault();
+              handlePaste();
+            }
           }
           return;
       }
