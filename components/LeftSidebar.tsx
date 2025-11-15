@@ -23,7 +23,6 @@ interface LeftSidebarProps {
   onAlignImages: (alignment: 'left' | 'h-center' | 'right' | 'top' | 'v-center' | 'bottom') => void;
   onArrangeImages: (direction: 'horizontal' | 'vertical') => void;
   onStackImages: (direction: 'horizontal' | 'vertical') => void;
-  onDistributeImages: (direction: 'horizontal' | 'vertical') => void;
   onMatchImageSizes: (dimension: 'width' | 'height') => void;
   exportFormat: 'png' | 'jpeg';
   setExportFormat: (format: 'png' | 'jpeg') => void;
@@ -76,7 +75,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
     onFileChange, selectedImage, selectedImageIds, onUpdateSelectedImages, cropArea, aspectRatio, setAspectRatio, activeTool, setActiveTool,
     toolOptions, setToolOptions, onCropToView,
     onUndo, onRedo, canUndo, canRedo,
-    onAlignImages, onArrangeImages, onStackImages, onDistributeImages, onMatchImageSizes, exportFormat, setExportFormat, onFitCropToImage,
+    onAlignImages, onArrangeImages, onStackImages, onMatchImageSizes, exportFormat, setExportFormat, onFitCropToImage,
     isLocked, onClearAllCanvas, onDownloadAllCanvas, onUncrop,
     onSaveProject, onLoadProject, onCreateGroup, images, onDownloadSelectedImages
   } = props;
@@ -391,13 +390,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                   <div className="grid grid-cols-2 gap-2">
                                       <button onClick={() => onStackImages('horizontal')} title="Stack Side-by-Side" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackHorizontalIcon /></button>
                                       <button onClick={() => onStackImages('vertical')} title="Stack Top-to-Bottom" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackVerticalIcon /></button>
-                                  </div>
-                              </div>
-                              <div>
-                                  <label className="block text-sm font-medium mb-2">Distribute</label>
-                                  <div className="grid grid-cols-2 gap-2">
-                                      <button onClick={() => onDistributeImages('horizontal')} disabled={selectedImageIds.length < 3} title="Distribute Horizontally" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50 flex justify-center items-center"><DistributeHorizontalIcon /></button>
-                                      <button onClick={() => onDistributeImages('vertical')} disabled={selectedImageIds.length < 3} title="Distribute Vertically" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50 flex justify-center items-center"><DistributeVerticalIcon /></button>
                                   </div>
                               </div>
                               <div>

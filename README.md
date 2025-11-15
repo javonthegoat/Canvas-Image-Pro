@@ -1,56 +1,87 @@
 # Canvas Image Pro
 
-This is an interactive web applet for advanced image manipulation, built by Google AI Studio. It features an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
+An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
-Here is a small preview of what you can use this app for. If you look at the bottom right corner you can see I grouped the references into
-two groups faces and materials. I got the digital painting references from pinterest.
-<img width="1920" height="911" alt="image" src="https://github.com/user-attachments/assets/d73dc4bf-5043-4d0e-ac73-3ea0e3910fc1" />
+<!-- ![Canvas Image Pro Screenshot](path/to/screenshot.png) -->
 
-## Features
+## Key Features
 
-### Selection and Manipulation
-- **Select Images**: Use the select tool to click on images. Hold `Shift` to select multiple images.
-- **Drag and Drop**: Drag multiple selected images simultaneously. Images can also be dragged and dropped onto the canvas from your computer, or pasted from the clipboard.
-- **Edit Annotations**: Use the select tool to edit annotations and change their individual properties. Multiple annotations can be selected and edited at the same time.
-- **Scale and Rotate Annotations**: Scale annotations up or down by dragging the blue square when selected. Rotate them by dragging the blue circle.
-- **Bulk Color Change**: Change the color of multiple annotations simultaneously.
-- **Eyedropper Tool**: Use the color picker to change the color of multiple annotations. First, select the annotations, then press `I` to activate the color picker and click on any color on the canvas from images or other annotations.
+### Core Canvas Functionality
+- **Infinite Canvas**: Work on a limitless, zoomable, and pannable canvas that adapts to your needs.
+- **Multi-Image Support**: Load and manipulate multiple images simultaneously.
+- **Flexible Image Loading**: Add images via a file dialog, drag & drop from your desktop, or paste directly from your clipboard.
+- **Full History**: Never lose your work with a robust undo/redo system that tracks every action.
 
-### Annotation Tools
+### Advanced Layering & Grouping
+- **Intuitive Layer List**: Manage all images and canvas-level annotations in a clear, hierarchical list.
+- **Drag & Drop Reordering**: Easily change the stacking order of images and groups by dragging them in the layer list.
+- **Full Layer Control**: Precisely reorder layers using 'Bring to Front', 'Send to Back', 'Move Forward', and 'Move Backward' controls.
+- **Image Grouping**: Select multiple images and group them into collapsible folders for streamlined organization and manipulation.
 
-- **Line, Arrow, and Freehand Draw**: These tools have properties such as color, stroke/line width, outline color, outline opacity, and outline width. When placing arrows and lines, hold `Shift` while clicking and dragging to align them to different angles.
-- **Rectangle and Circle**: These tools have properties such as color, stroke/line width, fill color, and fill opacity.
-- **Text Tool**: Options to change text color, font size, font family, background color and opacity, stroke color, stroke opacity, and stroke thickness.
-- **Drag and Drop Annotations**: Drag and drop annotations from images in the layers panel into other images, or from the canvas onto images.
+### Precise Transformations & Alignment
+- **Transform Tools**: Precisely scale, rotate, and position images using sidebar controls.
+- **Image Outlines**: Add customizable outlines to any image.
+- **Multi-Image Alignment**: Select multiple images to:
+    - **Align**: Align edges (left, right, top, bottom) or centers (horizontal, vertical).
+    - **Arrange**: Automatically place selected items in a smart grid that respects their layer order. Groups are treated as single blocks to keep your layouts tidy.
+    - **Stack**: Arrange images edge-to-edge in a horizontal or vertical stack.
+    - **Distribute**: Evenly space three or more images.
+    - **Match Size**: Match the width or height of all selected images to the last one selected.
 
-### Transform and Arrange Tools
+### Powerful Annotation Suite
+- **Comprehensive Toolset**:
+    - **Select & Move**: The default tool for manipulating items.
+    - **Drawing**: Line, Arrow, Freehand, Rectangle, and Circle tools.
+    - **Text**: Add rich text with font, color, background, and stroke options.
+    - **Eyedropper**: Quickly pick a color from anywhere on the canvas.
+- **Flexible Annotation Targets**: Annotations can be attached to a specific image (moving and scaling with it) or placed directly on the canvas.
+- **Annotation Re-parenting**: Seamlessly move an annotation from one image to another, or from the canvas to an image, via drag & drop in the layer list.
+- **Repositionable Floating Editor**: A context-aware floating menu appears for selected annotations, allowing for quick edits to color, stroke, fill, opacity, text content, and more. Drag the editor anywhere on screen to keep it out of your way.
 
-- **Rotate and Scale**: Rotate images to any degree and scale them as large as you like.
-- **Image Outline**: Add an outline to each image and change its width and color.
-- **Grouping**: Select multiple images and group them together.
-- **Align Selection**: Align images based on the last selected image. There are six alignment options: left, right, top, bottom, vertical center, and horizontal center.
-- **Arrange Grid**: Arrange images in a grid. The order is based on the layer stack (oldest to newest by default). Clicking the arrange button again reverses the order.
-- **Arrange Stack**: Stack images horizontally or vertically in a single line. Clicking the stack button again reverses the order.
-- **Match Size**: Match the width or height of one image to another. The last image selected is the source for the size matching.
+### Non-Destructive Cropping
+- **Dynamic Crop Box**: Create a crop selection that can be moved and resized.
+- **Aspect Ratios**: Constrain your crop selection to freeform, 1:1, 4:3, or 16:9 ratios.
+- **Crop & Replace**: Crop one or more images within the selection area. The original images are archived, allowing you to uncrop later.
+- **Copy to Clipboard**: Copy the contents of the crop area or selected images directly to the clipboard.
+- **Uncrop**: Revert a previously cropped image back to its original, uncropped state.
 
-### Crop Tool
+### Project Management & Export
+- **Save & Load**: Save your entire session (images, positions, annotations, groups) to a single `.cpro` JSON file and load it later to continue your work.
+- **Layer-Aware Export**: Download a single image, selected images, or all images on the canvas. When exporting multiple files as a ZIP archive, filenames are automatically prefixed with numbers to preserve the layer order from your project.
+- **Clear Canvas**: Reset the entire workspace with a single click.
 
-- **Activate Crop**: Hold `C` to start cropping. Click outside the crop area to cancel. Press `Enter` to confirm.
-- **Multi-Image Crop**: Crop multiple images at once, which is useful for images with the same dimensions.
-- **Aspect Ratios**: Choose from freeform, 1:1, 4:3, and 16:9 aspect ratios.
-- **Copy Cropped Area**: Press `Ctrl + C` to copy the cropped area to your clipboard.
-- **Uncrop**: You can uncrop an image after the crop has been confirmed.
-- **Fit to Image/View**: `Fit to image` matches the crop area to the image dimensions. `Fit to view` matches the crop area to your current canvas view.
+## Keyboard Shortcuts
 
-### Copy and Paste
+| Action                      | Shortcut Key                               |
+| --------------------------- | ------------------------------------------ |
+| Undo                        | `Ctrl/Cmd + Z`                             |
+| Redo                        | `Ctrl/Cmd + Y` or `Ctrl/Cmd + Shift + Z`   |
+| Activate Crop Tool (Hold)   | `C`                                        |
+| Activate Pan Tool (Hold)    | `Spacebar`                                 |
+| Delete Selection            | `Delete` or `Backspace`                    |
+| Apply Crop (with selection) | `Enter`                                    |
+| Copy Selection/Crop Area    | `Ctrl/Cmd + C`                             |
+| Switch to Select Tool       | `S`                                        |
+| Switch to Eyedropper Tool   | `I`                                        |
 
-- **Copy Image**: Select an image and press `Ctrl + C` to copy it.
-- **Copy Cropped Area**: If a crop area is active, `Ctrl + C` will copy the cropped area instead of the selected image.
-- **Copy Multiple Images**: If multiple images are selected, `Ctrl + C` will copy them as a single image.
+## How To Use
 
-### Project Management
+1.  **Load Images**: Click "Upload Images", drag files onto the canvas, or paste an image from your clipboard.
+2.  **Select Items**: Use the Select tool (`S`) to click on images or annotations. Hold `Shift` to select multiple items. You can also drag a marquee box to select multiple images.
+3.  **Manipulate**:
+    - Use the handles in the sidebar to scale and rotate selected images.
+    - Drag selected items on the canvas to move them.
+    - Use the alignment and distribution tools in the sidebar for precise layouts.
+4.  **Annotate**:
+    - Select an annotation tool from the toolbar.
+    - Click and drag on the canvas or an image to draw.
+    - For the Text tool, simply click where you want to add text.
+5.  **Crop**:
+    - Hold the `C` key and drag on the canvas to create a crop selection.
+    - Use the crop tools in the sidebar to apply the crop or copy the selection.
 
-- **Save and Load**: Save your entire project, including all images, annotations, and their properties. Load the project later to continue where you left off.
-- **Export**: Export images to a ZIP file, or download them individually as PNG or JPG.
-- **Clear Canvas**: Click "Clear Canvas" twice to remove all images from the canvas.
-- **Numbered Export**: When exporting to a ZIP file, images are named and numbered based on their order in the layer stack.
+## Built With
+
+- **React**: For building the user interface.
+- **TypeScript**: For static typing and improved code quality.
+- **Tailwind CSS**: For rapid, utility-first styling.

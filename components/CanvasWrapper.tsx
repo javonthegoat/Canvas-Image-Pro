@@ -13,7 +13,7 @@ interface CanvasWrapperProps {
   setImages: (updater: (prevImages: CanvasImage[]) => CanvasImage[]) => void;
   onInteractionEnd: () => void;
   selectedImageIds: string[];
-  setSelectedImageId: (id: string | null, multiSelect?: boolean) => void;
+  setSelectedImageId: (id: string | null, options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onSelectImages: (ids: string[], keepExisting: boolean) => void;
   cropArea: Rect | null;
   setCropArea: React.Dispatch<React.SetStateAction<Rect | null>>;
@@ -35,6 +35,8 @@ interface CanvasWrapperProps {
   onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
   reparentImageAnnotationsToImage: (annotations: Array<{ annotationId: string; imageId: string }>, newImageId: string) => void;
   onMoveSelectedImages: (delta: Point) => void;
+  lastCanvasMousePosition: React.MutableRefObject<Point>;
+  onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string; imageId: string }>) => void;
 }
 
 type CropHandle = 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
@@ -104,6 +106,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   reparentImageAnnotationsToImage,
   onMoveSelectedImages,
   deleteSelectedAnnotations,
+  lastCanvasMousePosition,
+  onReparentImageAnnotationsToCanvas,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -452,8 +456,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       }
     }
 
-    // FIX: Removed redundant check for 'eyedropper' since it's handled at the start of the function.
-    if (activeTool !== 'select') {
+    if (activeTool !== 'select' && activeTool !== 'eyedropper') {
       let targetImage: CanvasImage | undefined;
       if (selectedImageIds.length === 1) {
         targetImage = images.find(img => img.id === selectedImageIds[0]);
@@ -487,7 +490,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
       if (newAnnotation) {
         if (targetImage && !selectedImageIds.includes(targetImage.id)) {
-            setSelectedImageId(targetImage.id);
+            setSelectedImageId(targetImage.id, { shiftKey: false, ctrlKey: false });
         }
         setDrawingAnnotation({ annotation: newAnnotation, imageId: targetImage?.id ?? null });
       }
@@ -541,7 +544,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   
         if (isAlreadySelected && !isMultiSelectModifier) {
         } else {
-          setSelectedImageId(clickedImage.id, isMultiSelectModifier);
+          setSelectedImageId(clickedImage.id, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey });
         }
         setInteraction({ mode: 'move', startPoint: canvasPoint });
       } else {
@@ -781,18 +784,30 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
     let interactionCommitted = false;
 
-    if (interaction?.mode === 'move-annotation' && dropTargetImageId) {
-      const canvasAnnosToReparent = selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId);
-      if (canvasAnnosToReparent.length > 0) {
-          onReparentCanvasAnnotationsToImage(canvasAnnosToReparent, dropTargetImageId);
-          interactionCommitted = true;
-      }
-      
-      const imageAnnosToReparent = selectedAnnotations.filter((s): s is { imageId: string, annotationId: string } => s.imageId !== null && s.imageId !== dropTargetImageId);
-      if (imageAnnosToReparent.length > 0) {
-          reparentImageAnnotationsToImage(imageAnnosToReparent, dropTargetImageId);
-          interactionCommitted = true;
-      }
+    if (interaction?.mode === 'move-annotation') {
+        const finalCanvasPoint = getCanvasPoint({ x: e.clientX, y: e.clientY });
+        const imageAnnosToReparent = selectedAnnotations.filter((s): s is { annotationId: string, imageId: string } => s.imageId !== null);
+        
+        if (imageAnnosToReparent.length > 0) {
+            const sourceImageId = imageAnnosToReparent[0].imageId;
+            const sourceImage = images.find(img => img.id === sourceImageId);
+            const topMostImage = [...images].reverse().find(img => getLocalPoint(finalCanvasPoint, img));
+
+            if (dropTargetImageId && topMostImage && topMostImage.id === dropTargetImageId) {
+                // Drop on another image
+                reparentImageAnnotationsToImage(imageAnnosToReparent, dropTargetImageId);
+                interactionCommitted = true;
+            } else if (sourceImage && !getLocalPoint(finalCanvasPoint, sourceImage) && !topMostImage) {
+                // Drop on canvas
+                onReparentImageAnnotationsToCanvas(imageAnnosToReparent);
+                interactionCommitted = true;
+            }
+        }
+        const canvasAnnosToReparent = selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId);
+        if (canvasAnnosToReparent.length > 0 && dropTargetImageId) {
+            onReparentCanvasAnnotationsToImage(canvasAnnosToReparent, dropTargetImageId);
+            interactionCommitted = true;
+        }
     }
 
     if (interaction?.mode === 'marquee-select' && marqueeRect) {
@@ -862,7 +877,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
     setInteraction(null);
     setDropTargetImageId(null);
-  }, [interaction, addAnnotation, drawingAnnotation, marqueeRect, images, onSelectImages, cropArea, setCropArea, onInteractionEnd, setDrawingAnnotation, setMarqueeRect, addCanvasAnnotation, dropTargetImageId, onReparentCanvasAnnotationsToImage, reparentImageAnnotationsToImage, selectedAnnotations]);
+  }, [interaction, getCanvasPoint, addAnnotation, drawingAnnotation, marqueeRect, images, onSelectImages, cropArea, setCropArea, onInteractionEnd, setDrawingAnnotation, setMarqueeRect, addCanvasAnnotation, dropTargetImageId, onReparentCanvasAnnotationsToImage, reparentImageAnnotationsToImage, selectedAnnotations, getLocalPoint, onReparentImageAnnotationsToCanvas]);
 
   useEffect(() => {
     if (interaction) {
@@ -876,12 +891,14 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   }, [interaction, handleInteractionMove, handleInteractionEnd]);
   
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
+    const canvasPoint = getCanvasPoint({ x: e.clientX, y: e.clientY });
+    lastCanvasMousePosition.current = canvasPoint;
+
     if (interaction) return; // Dragging is handled by global listeners
 
     const canvas = internalCanvasRef.current;
     if (!canvas) return;
-    const canvasPoint = getCanvasPoint({ x: e.clientX, y: e.clientY });
-
+    
     let newCursor = isSpacebarPressed ? 'grab' : 'default';
       
     if (activeTool === 'eyedropper') {
@@ -913,7 +930,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         }
     }
     canvas.style.cursor = newCursor;
-  }, [interaction, getCanvasPoint, isSpacebarPressed, cropArea, viewTransform.scale, activeTool, images, getLocalPoint, findAnnotationAtPoint]);
+  }, [interaction, getCanvasPoint, isSpacebarPressed, cropArea, viewTransform.scale, activeTool, images, getLocalPoint, findAnnotationAtPoint, lastCanvasMousePosition]);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();

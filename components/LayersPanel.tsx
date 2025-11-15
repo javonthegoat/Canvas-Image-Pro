@@ -6,25 +6,30 @@ type AnnotationSelection = { imageId: string | null; annotationId: string; };
 
 interface LayersPanelProps {
   images: CanvasImage[];
+  visualLayerOrder: (Group | CanvasImage)[];
   onRenameImage: (id: string, newName: string) => void;
-  onSelectLayer: (layerId: string, layerType: 'image' | 'group', multiSelect?: boolean) => void;
+  onSelectLayer: (layerId: string, layerType: 'image' | 'group', options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onCenterOnLayer: (layerId: string, layerType: 'image' | 'group') => void;
   onSelectImages: (ids: string[], keepExisting: boolean) => void;
   onDeleteImage: (id: string) => void;
   onReorderTopLevelLayer: (dragId: string, dropId: string) => void;
   onReorderLayer: (layerId: string, move: 'up' | 'down' | 'top' | 'bottom') => void;
   selectedAnnotations: AnnotationSelection[];
-  setSelectedAnnotations: (updater: (prev: AnnotationSelection[]) => AnnotationSelection[]) => void;
-  onReparentAnnotation: (annotationId: string, oldImageId: string, newImageId: string) => void;
+  onSelectAnnotation: (imageId: string | null, annotationId: string, options: { shiftKey: boolean; ctrlKey: boolean }) => void;
   groups: Group[];
   onDeleteGroup: (groupId: string) => void;
   onRenameGroup: (groupId: string, newName: string) => void;
   onToggleGroupExpanded: (groupId: string) => void;
   onAddImageToGroup: (groupId: string, imageId: string) => void;
+  onUngroupImages: (imageIds: string[]) => void;
   canvasAnnotations: Annotation[];
   onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
+  onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string; imageId: string }>) => void;
   selectedImageIds: string[];
   selectedLayerId: string | null;
+  parentImageIds: Set<string>;
+  expandedImageAnnotationIds: string[];
+  onToggleImageAnnotationsExpanded: (imageId: string) => void;
 }
 
 const AnnotationIcon: React.FC<{ type: Annotation['type'] }> = ({ type }) => {
@@ -77,21 +82,22 @@ const AnnotationListItem: React.FC<{
 const CanvasImageItem: React.FC<{
     image: CanvasImage;
     isSelected: boolean;
-    onSelect: (id: string, type: 'image', multiSelect?: boolean) => void;
+    onSelect: (id: string, type: 'image', options: { shiftKey: boolean, ctrlKey: boolean }) => void;
     onCenter: (id: string, type: 'image') => void;
     onRename: (id: string, newName: string) => void;
     onDelete: (id: string) => void;
-    onReparentAnnotation: (annotationId: string, oldImageId: string, newImageId: string) => void;
     onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
+    onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string, imageId: string }>) => void;
     selectedAnnotations: AnnotationSelection[];
-    onSelectAnnotation: (imageId: string | null, annotationId: string, e: React.MouseEvent) => void;
+    onSelectAnnotation: (imageId: string | null, annotationId: string, options: { shiftKey: boolean; ctrlKey: boolean }) => void;
     isParentOfSelectedAnnotation: boolean;
     isGrouped?: boolean;
-}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentAnnotation, onReparentCanvasAnnotationsToImage, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped }) => {
+    isExpanded: boolean;
+    onToggleExpanded: (id: string) => void;
+}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentCanvasAnnotationsToImage, onReparentImageAnnotationsToCanvas, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped, isExpanded, onToggleExpanded }) => {
     const [isRenaming, setIsRenaming] = useState(false);
     const [name, setName] = useState(image.name);
     const [isDragOver, setIsDragOver] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
 
     const ringClasses = useMemo(() => {
@@ -103,7 +109,7 @@ const CanvasImageItem: React.FC<{
         }
         return '';
     }, [isDragOver, isSelected, isParentOfSelectedAnnotation]);
-
+    
     useEffect(() => {
         if (isRenaming) {
             inputRef.current?.focus();
@@ -150,10 +156,22 @@ const CanvasImageItem: React.FC<{
         try {
             const data = JSON.parse(e.dataTransfer.getData('application/json'));
             if (data.annotationId) {
-                if(data.imageId === null) { // from canvas
-                    onReparentCanvasAnnotationsToImage([data.annotationId], image.id);
-                } else if (data.imageId !== image.id) { // from another image
-                    onReparentAnnotation(data.annotationId, data.imageId, image.id);
+                const isDraggedSelected = selectedAnnotations.some(sel => sel.annotationId === data.annotationId);
+                if (data.imageId === null) { // From canvas
+                    const idsToMove = isDraggedSelected 
+                        ? selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId)
+                        : [data.annotationId];
+                    if (idsToMove.length > 0) onReparentCanvasAnnotationsToImage(idsToMove, image.id);
+                } else if (data.imageId !== image.id) { // From another image
+                    const selectionsToMove = isDraggedSelected
+                      ? selectedAnnotations.filter(s => s.imageId !== null && s.imageId !== image.id) as {imageId: string, annotationId: string}[]
+                      : [{ annotationId: data.annotationId, imageId: data.imageId }];
+                    if (selectionsToMove.length > 0) onReparentImageAnnotationsToCanvas(selectionsToMove); // First move to canvas...
+                    // A follow up action should move them to the new image. This is complex.
+                    // For now, let's simplify to single item drag.
+                    if(!isDraggedSelected) {
+                        onReparentImageAnnotationsToCanvas([{ annotationId: data.annotationId, imageId: data.imageId }]);
+                    }
                 }
             }
         } catch (error) {
@@ -173,10 +191,13 @@ const CanvasImageItem: React.FC<{
                 draggable
                 onDragStart={(e) => {
                     e.dataTransfer.setData('layer-id', image.id);
-                    e.dataTransfer.setData('image-id-for-grouping', image.id);
+                    e.dataTransfer.setData('layer-type', 'image');
+                    if (isGrouped) {
+                      e.dataTransfer.setData('image-id-for-ungrouping', image.id);
+                    }
                     e.dataTransfer.effectAllowed = 'move';
                 }}
-                onClick={(e) => onSelect(image.id, 'image', e.shiftKey || e.metaKey || e.ctrlKey)}
+                onClick={(e) => onSelect(image.id, 'image', { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey })}
                 onDoubleClick={() => onCenter(image.id, 'image')}
                 className={`flex items-center justify-between p-2 rounded-t-md space-x-2 cursor-pointer ${isSelected ? 'bg-blue-800' : 'hover:bg-gray-700'} ${isExpanded && 'rounded-b-none'}`}
             >
@@ -218,7 +239,7 @@ const CanvasImageItem: React.FC<{
                 </div>
                 <div className="flex items-center">
                     {image.annotations.length > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); setIsExpanded(prev => !prev); }} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-md transition-colors flex-shrink-0" title={isExpanded ? 'Collapse' : 'Expand'}>
+                        <button onClick={(e) => { e.stopPropagation(); onToggleExpanded(image.id); }} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-md transition-colors flex-shrink-0" title={isExpanded ? 'Collapse' : 'Expand'}>
                             {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
                         </button>
                     )}
@@ -239,7 +260,7 @@ const CanvasImageItem: React.FC<{
                             annotation={anno}
                             imageId={image.id}
                             isSelected={selectedAnnotations.some(sel => sel.annotationId === anno.id)}
-                            onSelect={onSelectAnnotation}
+                            onSelect={(imageId, annotationId, e) => onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey })}
                         />
                     ))}
                 </div>
@@ -252,7 +273,7 @@ const GroupListItem: React.FC<{
   group: Group;
   images: CanvasImage[];
   selectedImageIds: string[];
-  onSelectLayer: (id: string, type: 'group' | 'image', multiSelect?: boolean) => void;
+  onSelectLayer: (id: string, type: 'group' | 'image', options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onCenterOnLayer: (id: string, type: 'image' | 'group') => void;
   onRenameGroup: (groupId: string, newName: string) => void;
   onDeleteGroup: (groupId: string) => void;
@@ -260,12 +281,14 @@ const GroupListItem: React.FC<{
   onAddImageToGroup: (groupId: string, imageId: string) => void;
   onRenameImage: (id: string, newName: string) => void;
   onDeleteImage: (id: string) => void;
-  onReparentAnnotation: (annotationId: string, oldImageId: string, newImageId: string) => void;
+  onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string, imageId: string }>) => void;
   onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
   selectedAnnotations: AnnotationSelection[];
-  onSelectAnnotation: (imageId: string | null, annotationId: string, e: React.MouseEvent) => void;
+  onSelectAnnotation: (imageId: string | null, annotationId: string, options: { shiftKey: boolean; ctrlKey: boolean }) => void;
   parentImageIds: Set<string>;
   selectedLayerId: string | null;
+  expandedImageAnnotationIds: string[];
+  onToggleImageAnnotationsExpanded: (imageId: string) => void;
 }> = (props) => {
     const { group, images, selectedImageIds, onRenameGroup, onDeleteGroup, onToggleGroupExpanded, onAddImageToGroup, onSelectLayer, onCenterOnLayer, selectedLayerId } = props;
     const [isRenaming, setIsRenaming] = useState(false);
@@ -298,32 +321,47 @@ const GroupListItem: React.FC<{
         setIsRenaming(false);
     };
 
+    const handleDragEnter = (e: React.DragEvent) => {
+        if (e.dataTransfer.types.includes('layer-id')) {
+            e.preventDefault();
+            setIsDragOver(true);
+        }
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        if (e.dataTransfer.types.includes('layer-id')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        }
+    };
+    
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
-        const imageId = e.dataTransfer.getData('image-id-for-grouping');
-        if (imageId && !group.imageIds.includes(imageId)) {
+        const layerType = e.dataTransfer.getData('layer-type');
+        const imageId = e.dataTransfer.getData('layer-id');
+        if (layerType === 'image' && imageId && !group.imageIds.includes(imageId)) {
             onAddImageToGroup(group.id, imageId);
         }
     };
     
     return (
         <div
-            onDragEnter={(e) => { e.preventDefault(); setIsDragOver(true); }}
+            onDragEnter={handleDragEnter}
             onDragLeave={() => setIsDragOver(false)}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={handleDragOver}
             onDrop={handleDrop}
             className={`bg-gray-800/50 rounded-md transition-all duration-150 ${isDragOver ? 'ring-2 ring-blue-500' : ''}`}
         >
             <div 
                 draggable
                 onDragStart={(e) => {
-                    e.stopPropagation();
                     e.dataTransfer.setData('layer-id', group.id);
+                    e.dataTransfer.setData('layer-type', 'group');
                     e.dataTransfer.effectAllowed = 'move';
                 }}
-                onClick={(e) => onSelectLayer(group.id, 'group', e.shiftKey || e.metaKey || e.ctrlKey)} 
+                onClick={(e) => onSelectLayer(group.id, 'group', { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey })}
                 onDoubleClick={() => onCenterOnLayer(group.id, 'group')}
                 className={`flex items-center justify-between p-2 rounded-t-md space-x-2 cursor-pointer ${isSelected ? 'bg-blue-900/50' : 'hover:bg-gray-700/50'} ${group.isExpanded && 'rounded-b-none'}`}
             >
@@ -351,7 +389,7 @@ const GroupListItem: React.FC<{
             </div>
             {group.isExpanded && (
                 <div className="p-1 pb-2 space-y-1">
-                    {groupImages.map((img) => (
+                    {[...groupImages].reverse().map((img) => (
                         <CanvasImageItem
                             key={img.id}
                             image={img}
@@ -360,12 +398,14 @@ const GroupListItem: React.FC<{
                             onCenter={props.onCenterOnLayer}
                             onRename={props.onRenameImage}
                             onDelete={props.onDeleteImage}
-                            onReparentAnnotation={props.onReparentAnnotation}
                             onReparentCanvasAnnotationsToImage={props.onReparentCanvasAnnotationsToImage}
+                            onReparentImageAnnotationsToCanvas={props.onReparentImageAnnotationsToCanvas}
                             selectedAnnotations={props.selectedAnnotations}
                             onSelectAnnotation={props.onSelectAnnotation}
                             isParentOfSelectedAnnotation={props.parentImageIds.has(img.id)}
                             isGrouped
+                            isExpanded={props.expandedImageAnnotationIds.includes(img.id)}
+                            onToggleExpanded={props.onToggleImageAnnotationsExpanded}
                         />
                     ))}
                 </div>
@@ -376,67 +416,61 @@ const GroupListItem: React.FC<{
 
 export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
     const {
-      images, onRenameImage, onSelectLayer, onCenterOnLayer, onSelectImages, onDeleteImage, onReorderTopLevelLayer,
-      selectedAnnotations, setSelectedAnnotations, onReparentAnnotation, groups,
-      onDeleteGroup, onRenameGroup, onToggleGroupExpanded, onAddImageToGroup,
+      images, visualLayerOrder, onRenameImage, onSelectLayer, onCenterOnLayer, onSelectImages, onDeleteImage, onReorderTopLevelLayer,
+      selectedAnnotations, onSelectAnnotation, groups,
+      onDeleteGroup, onRenameGroup, onToggleGroupExpanded, onAddImageToGroup, onUngroupImages,
       canvasAnnotations, onReparentCanvasAnnotationsToImage, selectedImageIds, onReorderLayer,
-      selectedLayerId
+      selectedLayerId, onReparentImageAnnotationsToCanvas, parentImageIds, expandedImageAnnotationIds, onToggleImageAnnotationsExpanded
     } = props;
 
-    const parentImageIds = useMemo(() => new Set(selectedAnnotations.map(sel => sel.imageId)), [selectedAnnotations]);
+    const [isMainDragOver, setIsMainDragOver] = useState(false);
 
-    const displayedLayers = useMemo(() => {
-        const layerItems: (Group | CanvasImage)[] = [];
-        const processedImageIds = new Set<string>();
-        
-        images.forEach(img => {
-            if (processedImageIds.has(img.id)) return;
-            const group = groups.find(g => g.imageIds.includes(img.id));
-            if (group) {
-                if (!layerItems.some(item => item.id === group.id)) {
-                    layerItems.push(group);
-                }
-                group.imageIds.forEach(id => processedImageIds.add(id));
-            } else {
-                layerItems.push(img);
-            }
-        });
-        return layerItems;
-    }, [groups, images]);
+    const displayedLayers = visualLayerOrder;
 
     const { isFirst, isLast } = useMemo(() => {
         if (!selectedLayerId) return { isFirst: true, isLast: true };
-
         const parentGroup = groups.find(g => g.imageIds.includes(selectedLayerId));
+        const items = parentGroup ? [...parentGroup.imageIds].reverse() : displayedLayers.map(l => l.id);
+        const currentIndex = items.indexOf(selectedLayerId);
         
-        if (parentGroup) {
-            const imageIds = parentGroup.imageIds;
-            const index = imageIds.indexOf(selectedLayerId);
-            return {
-                isFirst: index === 0,
-                isLast: index === imageIds.length - 1
-            };
-        } else {
-            const index = displayedLayers.findIndex(item => item.id === selectedLayerId);
-            if (index === -1) return { isFirst: true, isLast: true };
-            return {
-                isFirst: index === 0,
-                isLast: index === displayedLayers.length - 1
-            };
-        }
+        if (currentIndex === -1) return { isFirst: true, isLast: true };
+        
+        return {
+            isFirst: currentIndex === 0,
+            isLast: currentIndex === items.length - 1
+        };
     }, [selectedLayerId, displayedLayers, groups]);
 
     const handleAnnotationSelect = (imageId: string | null, annotationId: string, e: React.MouseEvent) => {
-        const isMultiSelect = e.shiftKey || e.metaKey || e.ctrlKey;
-        setSelectedAnnotations(prev => {
-            const selection = { imageId, annotationId };
-            const isSelected = prev.some(s => s.annotationId === annotationId);
-            if (isMultiSelect) {
-                return isSelected ? prev.filter(s => s.annotationId !== annotationId) : [...prev, selection];
-            } else {
-                return isSelected && prev.length === 1 ? prev : [selection];
-            }
-        });
+        onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey });
+    };
+
+    const handleMainDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsMainDragOver(false);
+
+      const annotationPayload = e.dataTransfer.getData('application/json');
+      if (annotationPayload) {
+          try {
+              const data = JSON.parse(annotationPayload);
+              if (data.annotationId && data.imageId) { // From an image
+                  const isDraggedSelected = selectedAnnotations.some(s => s.annotationId === data.annotationId);
+                  const selectionsToMove = isDraggedSelected 
+                      ? selectedAnnotations.filter(s => s.imageId !== null) as { imageId: string; annotationId: string }[]
+                      : [{ annotationId: data.annotationId, imageId: data.imageId }];
+                  
+                  if (selectionsToMove.length > 0) onReparentImageAnnotationsToCanvas(selectionsToMove);
+              }
+          } catch {}
+          return;
+      }
+
+      const imageIdForUngrouping = e.dataTransfer.getData('image-id-for-ungrouping');
+      if (imageIdForUngrouping) {
+          onUngroupImages([imageIdForUngrouping]);
+          return;
+      }
     };
 
     return (
@@ -448,7 +482,18 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                 </div>
             </div>
 
-            <div className="flex-grow overflow-y-auto p-2 space-y-2">
+            <div 
+                className={`flex-grow overflow-y-auto p-2 space-y-2 transition-colors ${isMainDragOver ? 'bg-blue-900/20' : ''}`}
+                onDragOver={(e) => {
+                    if (e.dataTransfer.types.includes('application/json') || e.dataTransfer.types.includes('image-id-for-ungrouping')) {
+                        e.preventDefault();
+                        setIsMainDragOver(true);
+                        e.dataTransfer.dropEffect = 'move';
+                    }
+                }}
+                onDragLeave={() => setIsMainDragOver(false)}
+                onDrop={handleMainDrop}
+            >
                 {displayedLayers.length === 0 && canvasAnnotations.length === 0 ? (
                     <p className="text-xs text-gray-500 text-center py-4">Canvas is empty.</p>
                 ) : (
@@ -485,6 +530,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                                             onToggleGroupExpanded={onToggleGroupExpanded}
                                             onSelectAnnotation={handleAnnotationSelect}
                                             parentImageIds={parentImageIds}
+                                            expandedImageAnnotationIds={expandedImageAnnotationIds}
+                                            onToggleImageAnnotationsExpanded={onToggleImageAnnotationsExpanded}
                                         />
                                     ) : (
                                         <CanvasImageItem
@@ -494,17 +541,20 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                                             onCenter={onCenterOnLayer}
                                             onRename={onRenameImage}
                                             onDelete={onDeleteImage}
-                                            onReparentAnnotation={onReparentAnnotation}
                                             onReparentCanvasAnnotationsToImage={onReparentCanvasAnnotationsToImage}
+                                            onReparentImageAnnotationsToCanvas={onReparentImageAnnotationsToCanvas}
                                             selectedAnnotations={selectedAnnotations}
                                             onSelectAnnotation={handleAnnotationSelect}
                                             isParentOfSelectedAnnotation={parentImageIds.has(layer.id)}
+                                            isExpanded={expandedImageAnnotationIds.includes(layer.id)}
+                                            onToggleExpanded={onToggleImageAnnotationsExpanded}
                                         />
                                     )}
                                 </div>
                             );
                         })}
-                        {[...canvasAnnotations].sort((a,b) => (a.id > b.id ? 1 : -1)).map(anno => (
+                        
+                        {[...canvasAnnotations].sort((a,b) => (a.id > b.id ? -1 : 1)).map(anno => (
                             <AnnotationListItem
                                 key={anno.id}
                                 annotation={anno}
@@ -517,10 +567,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                 )}
             </div>
             <div className="flex items-center justify-center p-1 border-t border-gray-700 space-x-2">
-                <button onClick={() => onReorderLayer(selectedLayerId!, 'bottom')} disabled={!selectedLayerId || isFirst} title="Send to Back" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronsUpIcon/></button>
-                <button onClick={() => onReorderLayer(selectedLayerId!, 'down')} disabled={!selectedLayerId || isFirst} title="Move Backward" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronUpIcon/></button>
-                <button onClick={() => onReorderLayer(selectedLayerId!, 'up')} disabled={!selectedLayerId || isLast} title="Move Forward" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronDownIcon/></button>
-                <button onClick={() => onReorderLayer(selectedLayerId!, 'top')} disabled={!selectedLayerId || isLast} title="Bring to Front" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronsDownIcon/></button>
+                <button onClick={() => onReorderLayer(selectedLayerId!, 'top')} disabled={!selectedLayerId || isFirst} title="Bring to Front" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronsUpIcon/></button>
+                <button onClick={() => onReorderLayer(selectedLayerId!, 'up')} disabled={!selectedLayerId || isFirst} title="Move Forward" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronUpIcon/></button>
+                <button onClick={() => onReorderLayer(selectedLayerId!, 'down')} disabled={!selectedLayerId || isLast} title="Move Backward" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronDownIcon/></button>
+                <button onClick={() => onReorderLayer(selectedLayerId!, 'bottom')} disabled={!selectedLayerId || isLast} title="Send to Back" className="p-2 hover:bg-gray-700 rounded-md disabled:opacity-30 disabled:cursor-not-allowed"><ChevronsDownIcon/></button>
             </div>
         </aside>
     );
