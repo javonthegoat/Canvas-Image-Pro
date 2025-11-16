@@ -111,6 +111,10 @@ export type AspectRatio = 'free' | '1:1' | '4:3' | '16:9';
 export interface Group {
   id: string;
   name: string;
+  label: string;
+  showLabel: boolean;
   imageIds: string[];
+  groupIds: string[];
   isExpanded: boolean;
+  parentId: string | null;
 }

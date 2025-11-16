@@ -40,6 +40,45 @@ export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 };
 
+export const getGroupBounds = (
+    group: Group,
+    allGroups: Group[],
+    allImages: CanvasImage[]
+): Rect | null => {
+    const imageMap = new Map(allImages.map(i => [i.id, i]));
+    const groupMap = new Map(allGroups.map(g => [g.id, g]));
+
+    const boundsToCombine: Rect[] = [];
+
+    // Bounds of direct child images
+    const childImages = group.imageIds.map(id => imageMap.get(id)).filter(Boolean) as CanvasImage[];
+    if (childImages.length > 0) {
+        const imageBounds = getImagesBounds(childImages);
+        if (imageBounds) boundsToCombine.push(imageBounds);
+    }
+
+    // Bounds of child groups
+    group.groupIds.forEach(childGroupId => {
+        const childGroup = groupMap.get(childGroupId);
+        if (childGroup) {
+            const childGroupBounds = getGroupBounds(childGroup, allGroups, allImages);
+            if (childGroupBounds) boundsToCombine.push(childGroupBounds);
+        }
+    });
+
+    if (boundsToCombine.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    boundsToCombine.forEach(rect => {
+        minX = Math.min(minX, rect.x);
+        minY = Math.min(minY, rect.y);
+        maxX = Math.max(maxX, rect.x + rect.width);
+        maxY = Math.max(maxY, rect.y + rect.height);
+    });
+
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
 export const transformLocalToGlobal = (localPoint: Point, image: CanvasImage): Point => {
     const imgCenterX = image.x + (image.width * image.scale) / 2;
     const imgCenterY = image.y + (image.height * image.scale) / 2;
@@ -419,8 +458,8 @@ export const drawCanvas = (
     groups.forEach(group => {
         const groupImages = group.imageIds.map(id => imageMap.get(id)).filter((img): img is CanvasImage => !!img);
 
-        if (groupImages.length > 0) {
-            const bounds = getImagesBounds(groupImages);
+        if (groupImages.length > 0 || group.groupIds.length > 0) {
+            const bounds = getGroupBounds(group, groups, images);
             if (bounds) {
                 const PADDING = 15;
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
@@ -606,4 +645,46 @@ export const drawCanvas = (
     }
 
     ctx.restore();
+
+    // Draw group labels in screen space after all world-space drawing
+    groups.forEach(group => {
+        if (group.showLabel && group.label) {
+            const bounds = getGroupBounds(group, groups, images);
+            if (bounds) {
+                ctx.save();
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // Reset transform to draw in screen space
+                
+                const FONT_SIZE = 12;
+                const PADDING = 4;
+                
+                const boundsCenterScreenX = (bounds.x * viewTransform.scale + viewTransform.offset.x) + (bounds.width * viewTransform.scale / 2);
+                const boundsTopScreenY = (bounds.y * viewTransform.scale + viewTransform.offset.y);
+
+                ctx.font = `bold ${FONT_SIZE}px sans-serif`;
+                const textMetrics = ctx.measureText(group.label);
+                
+                const boxWidth = textMetrics.width + PADDING * 2;
+                const boxHeight = FONT_SIZE + PADDING * 2;
+                
+                const finalX = boundsCenterScreenX - (boxWidth / 2);
+                const finalY = boundsTopScreenY - boxHeight - PADDING;
+                
+                ctx.fillStyle = 'rgba(23, 23, 23, 0.8)';
+                ctx.strokeStyle = 'rgba(115, 115, 115, 0.5)';
+                ctx.lineWidth = 1;
+
+                ctx.beginPath();
+                ctx.roundRect(finalX, finalY, boxWidth, boxHeight, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#e5e5e5';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(group.label, finalX + PADDING, finalY + boxHeight / 2);
+
+                ctx.restore();
+            }
+        }
+    });
 };

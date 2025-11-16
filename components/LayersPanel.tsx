@@ -1,8 +1,50 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, Annotation, Group } from '../types';
-import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon, ChevronsUpIcon, ChevronsDownIcon } from './icons';
+import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon, ChevronsUpIcon, ChevronsDownIcon, EyeIcon, EyeOffIcon, PencilIcon } from './icons';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
+
+const getAllImageIdsInGroup = (groupId: string, allGroups: Group[]): string[] => {
+    const groupMap = new Map(allGroups.map(g => [g.id, g]));
+    const visited = new Set<string>();
+    const imageIds: string[] = [];
+    const q = [groupId];
+    visited.add(groupId);
+
+    while (q.length > 0) {
+        const currentId = q.shift()!;
+        const currentGroup = groupMap.get(currentId);
+        if (!currentGroup) continue;
+        
+        imageIds.push(...currentGroup.imageIds);
+        currentGroup.groupIds.forEach(childId => {
+            if (!visited.has(childId)) {
+                q.push(childId);
+                visited.add(childId);
+            }
+        });
+    }
+    return imageIds;
+};
+
+const getOrderedChildrenOfGroup = (group: Group, allImages: CanvasImage[], allGroups: Group[]): (Group | CanvasImage)[] => {
+    const childImageItems = group.imageIds.map(id => allImages.find(i => i.id === id)).filter((i): i is CanvasImage => !!i);
+    const childGroupItems = group.groupIds.map(id => allGroups.find(g => g.id === id)).filter((g): g is Group => !!g);
+    const allChildren = [...childImageItems, ...childGroupItems];
+    
+    const imageZIndexMap = new Map(allImages.map((img, i) => [img.id, i]));
+    const getItemMaxZ = (item: Group | CanvasImage): number => {
+        if ('element' in item) {
+            return imageZIndexMap.get(item.id) ?? -Infinity;
+        }
+        const imageIds = getAllImageIdsInGroup(item.id, allGroups);
+        if (imageIds.length === 0) return -Infinity; // Group with no images
+        return Math.max(...imageIds.map(id => imageZIndexMap.get(id) ?? -Infinity));
+    };
+
+    allChildren.sort((a, b) => getItemMaxZ(b) - getItemMaxZ(a));
+    return allChildren;
+};
 
 interface LayersPanelProps {
   images: CanvasImage[];
@@ -30,6 +72,9 @@ interface LayersPanelProps {
   parentImageIds: Set<string>;
   expandedImageAnnotationIds: string[];
   onToggleImageAnnotationsExpanded: (imageId: string) => void;
+  onReparentGroup: (childGroupId: string, parentGroupId: string | null) => void;
+  onRenameGroupLabel: (groupId: string, newLabel: string) => void;
+  onToggleGroupLabel: (groupId: string) => void;
 }
 
 const AnnotationIcon: React.FC<{ type: Annotation['type'] }> = ({ type }) => {
@@ -94,7 +139,8 @@ const CanvasImageItem: React.FC<{
     isGrouped?: boolean;
     isExpanded: boolean;
     onToggleExpanded: (id: string) => void;
-}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentCanvasAnnotationsToImage, onReparentImageAnnotationsToCanvas, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped, isExpanded, onToggleExpanded }) => {
+    depth?: number;
+}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentCanvasAnnotationsToImage, onReparentImageAnnotationsToCanvas, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped, isExpanded, onToggleExpanded, depth = 0 }) => {
     const [isRenaming, setIsRenaming] = useState(false);
     const [name, setName] = useState(image.name);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -185,7 +231,8 @@ const CanvasImageItem: React.FC<{
             onDragLeave={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            className={`bg-gray-800 rounded-md transition-all duration-150 ${ringClasses} ${isGrouped ? 'ml-4' : ''}`}
+            className={`bg-gray-800 rounded-md transition-all duration-150 ${ringClasses}`}
+            style={{ marginLeft: `${depth * 16}px`}}
         >
             <div
                 draggable
@@ -254,7 +301,8 @@ const CanvasImageItem: React.FC<{
             </div>
             {isExpanded && image.annotations.length > 0 && (
                 <div className="p-1 pb-2 space-y-1 rounded-b-md">
-                    {image.annotations.sort((a, b) => (a.id > b.id ? 1 : -1)).map(anno => (
+                    {/* FIX: Use localeCompare for robust string sorting of annotations. */}
+                    {[...image.annotations].sort((a, b) => String(a.id).localeCompare(String(b.id))).map(anno => (
                         <AnnotationListItem
                             key={anno.id}
                             annotation={anno}
@@ -269,56 +317,44 @@ const CanvasImageItem: React.FC<{
     );
 };
 
-const GroupListItem: React.FC<{
-  group: Group;
-  images: CanvasImage[];
-  selectedImageIds: string[];
-  onSelectLayer: (id: string, type: 'group' | 'image', options: { shiftKey: boolean, ctrlKey: boolean }) => void;
-  onCenterOnLayer: (id: string, type: 'image' | 'group') => void;
-  onRenameGroup: (groupId: string, newName: string) => void;
-  onDeleteGroup: (groupId: string) => void;
-  onToggleGroupExpanded: (groupId: string) => void;
-  onAddImageToGroup: (groupId: string, imageId: string) => void;
-  onRenameImage: (id: string, newName: string) => void;
-  onDeleteImage: (id: string) => void;
-  onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string, imageId: string }>) => void;
-  onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
-  selectedAnnotations: AnnotationSelection[];
-  onSelectAnnotation: (imageId: string | null, annotationId: string, options: { shiftKey: boolean; ctrlKey: boolean }) => void;
-  parentImageIds: Set<string>;
-  selectedLayerId: string | null;
-  expandedImageAnnotationIds: string[];
-  onToggleImageAnnotationsExpanded: (imageId: string) => void;
+const GroupListItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder' | 'canvasAnnotations' | 'onReorderTopLevelLayer'> & {
+    group: Group;
+    depth?: number;
 }> = (props) => {
-    const { group, images, selectedImageIds, onRenameGroup, onDeleteGroup, onToggleGroupExpanded, onAddImageToGroup, onSelectLayer, onCenterOnLayer, selectedLayerId } = props;
+    const { group, images, groups, selectedImageIds, onRenameGroup, onDeleteGroup, onToggleGroupExpanded, onAddImageToGroup, onSelectLayer, onCenterOnLayer, selectedLayerId, onReparentGroup, onRenameGroupLabel, onToggleGroupLabel, depth = 0 } = props;
     const [isRenaming, setIsRenaming] = useState(false);
     const [name, setName] = useState(group.name);
+    const [isRenamingLabel, setIsRenamingLabel] = useState(false);
+    const [label, setLabel] = useState(group.label);
     const [isDragOver, setIsDragOver] = useState(false);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const nameInputRef = useRef<HTMLInputElement>(null);
+    const labelInputRef = useRef<HTMLInputElement>(null);
 
-    const groupImages = useMemo(() => {
-        const imageMap = new Map(images.map(img => [img.id, img]));
-        return group.imageIds
-            .map(id => imageMap.get(id))
-            .filter((img): img is CanvasImage => !!img);
-    }, [group.imageIds, images]);
-    
     const isSelected = selectedLayerId === group.id;
 
     useEffect(() => {
-        if (isRenaming) {
-            inputRef.current?.focus();
-            inputRef.current?.select();
-        }
+        if (isRenaming) nameInputRef.current?.focus();
     }, [isRenaming]);
+    
+    useEffect(() => {
+        if (isRenamingLabel) labelInputRef.current?.focus();
+    }, [isRenamingLabel]);
+
+    useEffect(() => {
+      setName(group.name);
+      setLabel(group.label);
+    }, [group.name, group.label]);
 
     const handleRename = () => {
-        if (name.trim()) {
-            onRenameGroup(group.id, name.trim());
-        } else {
-            setName(group.name);
-        }
+        if (name.trim()) onRenameGroup(group.id, name.trim());
+        else setName(group.name);
         setIsRenaming(false);
+    };
+    
+    const handleRenameLabel = () => {
+        if (label.trim()) onRenameGroupLabel(group.id, label.trim());
+        else setLabel(group.label);
+        setIsRenamingLabel(false);
     };
 
     const handleDragEnter = (e: React.DragEvent) => {
@@ -340,11 +376,17 @@ const GroupListItem: React.FC<{
         e.stopPropagation();
         setIsDragOver(false);
         const layerType = e.dataTransfer.getData('layer-type');
-        const imageId = e.dataTransfer.getData('layer-id');
-        if (layerType === 'image' && imageId && !group.imageIds.includes(imageId)) {
-            onAddImageToGroup(group.id, imageId);
+        const draggedId = e.dataTransfer.getData('layer-id');
+        if (layerType === 'image' && draggedId && !group.imageIds.includes(draggedId)) {
+            onAddImageToGroup(group.id, draggedId);
+        } else if (layerType === 'group' && draggedId && draggedId !== group.id) {
+            onReparentGroup(draggedId, group.id);
         }
     };
+
+    const sortedChildren = useMemo(() => {
+        return getOrderedChildrenOfGroup(group, images, groups);
+    }, [group, images, groups]);
     
     return (
         <div
@@ -353,6 +395,7 @@ const GroupListItem: React.FC<{
             onDragOver={handleDragOver}
             onDrop={handleDrop}
             className={`bg-gray-800/50 rounded-md transition-all duration-150 ${isDragOver ? 'ring-2 ring-blue-500' : ''}`}
+            style={{ marginLeft: `${depth * 16}px`}}
         >
             <div 
                 draggable
@@ -365,17 +408,15 @@ const GroupListItem: React.FC<{
                 onDoubleClick={() => onCenterOnLayer(group.id, 'group')}
                 className={`flex items-center justify-between p-2 rounded-t-md space-x-2 cursor-pointer ${isSelected ? 'bg-blue-900/50' : 'hover:bg-gray-700/50'} ${group.isExpanded && 'rounded-b-none'}`}
             >
-                <div 
-                    className="flex items-center flex-1 min-w-0 space-x-3"
-                >
+                <div className="flex items-center flex-1 min-w-0 space-x-3">
                     <LayersIcon className="w-5 h-5 text-gray-400" />
                     <div className="flex-1 min-w-0">
                         {isRenaming ? (
-                             <input ref={inputRef} type="text" value={name} onClick={(e) => e.stopPropagation()} onChange={(e) => setName(e.target.value)} onBlur={handleRename} onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') { setIsRenaming(false); setName(group.name); }}} className="w-full bg-gray-900 text-sm p-1 rounded-sm border border-blue-500"/>
+                             <input ref={nameInputRef} type="text" value={name} onClick={(e) => e.stopPropagation()} onChange={(e) => setName(e.target.value)} onBlur={handleRename} onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') { setIsRenaming(false); setName(group.name); }}} className="w-full bg-gray-900 text-sm p-1 rounded-sm border border-blue-500"/>
                         ) : (
                             <p onDoubleClick={(e) => { e.stopPropagation(); setIsRenaming(true); }} className="text-sm font-bold truncate" title={group.name}>{group.name}</p>
                         )}
-                         <p className="text-xs text-gray-400 truncate">{group.imageIds.length} item(s)</p>
+                         <p className="text-xs text-gray-400 truncate">{group.imageIds.length + group.groupIds.length} item(s)</p>
                     </div>
                 </div>
                  <div className="flex items-center">
@@ -387,27 +428,45 @@ const GroupListItem: React.FC<{
                     </button>
                 </div>
             </div>
-            {group.isExpanded && (
-                <div className="p-1 pb-2 space-y-1">
-                    {[...groupImages].reverse().map((img) => (
-                        <CanvasImageItem
-                            key={img.id}
-                            image={img}
-                            isSelected={selectedImageIds.includes(img.id)}
-                            onSelect={props.onSelectLayer}
-                            onCenter={props.onCenterOnLayer}
-                            onRename={props.onRenameImage}
-                            onDelete={props.onDeleteImage}
-                            onReparentCanvasAnnotationsToImage={props.onReparentCanvasAnnotationsToImage}
-                            onReparentImageAnnotationsToCanvas={props.onReparentImageAnnotationsToCanvas}
-                            selectedAnnotations={props.selectedAnnotations}
-                            onSelectAnnotation={props.onSelectAnnotation}
-                            isParentOfSelectedAnnotation={props.parentImageIds.has(img.id)}
-                            isGrouped
-                            isExpanded={props.expandedImageAnnotationIds.includes(img.id)}
-                            onToggleExpanded={props.onToggleImageAnnotationsExpanded}
-                        />
-                    ))}
+             {group.isExpanded && (
+                <div className="p-1 space-y-1">
+                    <div className="flex items-center bg-gray-900/50 rounded-md p-1.5 space-x-2 text-xs">
+                        <span className="font-semibold text-gray-400">Canvas Label:</span>
+                        {isRenamingLabel ? (
+                            <input ref={labelInputRef} type="text" value={label} onClick={(e) => e.stopPropagation()} onChange={(e) => setLabel(e.target.value)} onBlur={handleRenameLabel} onKeyDown={(e) => { if (e.key === 'Enter') handleRenameLabel(); if (e.key === 'Escape') { setIsRenamingLabel(false); setLabel(group.label); }}} className="flex-1 bg-gray-800 text-xs p-1 rounded-sm border border-blue-500"/>
+                        ) : (
+                            <p className="truncate flex-1" title={group.label}>{group.label}</p>
+                        )}
+                        <button onClick={(e) => {e.stopPropagation(); setIsRenamingLabel(true)}} className="p-1 text-gray-400 hover:text-white"><PencilIcon className="w-3 h-3"/></button>
+                        <button onClick={(e) => {e.stopPropagation(); onToggleGroupLabel(group.id)}} className="p-1 text-gray-400 hover:text-white" title={group.showLabel ? 'Hide Label' : 'Show Label'}>
+                            {group.showLabel ? <EyeIcon className="w-4 h-4"/> : <EyeOffIcon className="w-4 h-4"/>}
+                        </button>
+                    </div>
+
+                    {sortedChildren.map(child => {
+                        const isGroup = 'groupIds' in child;
+                        return isGroup ? (
+                           <GroupListItem key={child.id} {...props} group={child as Group} depth={depth + 1} />
+                        ) : (
+                           <CanvasImageItem
+                                key={child.id}
+                                image={child as CanvasImage}
+                                isSelected={selectedImageIds.includes(child.id)}
+                                onSelect={props.onSelectLayer}
+                                onCenter={props.onCenterOnLayer}
+                                onRename={props.onRenameImage}
+                                onDelete={props.onDeleteImage}
+                                onReparentCanvasAnnotationsToImage={props.onReparentCanvasAnnotationsToImage}
+                                onReparentImageAnnotationsToCanvas={props.onReparentImageAnnotationsToCanvas}
+                                selectedAnnotations={props.selectedAnnotations}
+                                onSelectAnnotation={props.onSelectAnnotation}
+                                isParentOfSelectedAnnotation={props.parentImageIds.has(child.id)}
+                                isGrouped
+                                isExpanded={props.expandedImageAnnotationIds.includes(child.id)}
+                                onToggleExpanded={props.onToggleImageAnnotationsExpanded}
+                            />
+                        )
+                    })}
                 </div>
             )}
         </div>
@@ -420,7 +479,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
       selectedAnnotations, onSelectAnnotation, groups,
       onDeleteGroup, onRenameGroup, onToggleGroupExpanded, onAddImageToGroup, onUngroupImages,
       canvasAnnotations, onReparentCanvasAnnotationsToImage, selectedImageIds, onReorderLayer,
-      selectedLayerId, onReparentImageAnnotationsToCanvas, parentImageIds, expandedImageAnnotationIds, onToggleImageAnnotationsExpanded
+      selectedLayerId, onReparentImageAnnotationsToCanvas, parentImageIds, expandedImageAnnotationIds, onToggleImageAnnotationsExpanded, onReparentGroup
     } = props;
 
     const [isMainDragOver, setIsMainDragOver] = useState(false);
@@ -429,9 +488,18 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
 
     const { isFirst, isLast } = useMemo(() => {
         if (!selectedLayerId) return { isFirst: true, isLast: true };
-        const parentGroup = groups.find(g => g.imageIds.includes(selectedLayerId));
-        const items = parentGroup ? [...parentGroup.imageIds].reverse() : displayedLayers.map(l => l.id);
-        const currentIndex = items.indexOf(selectedLayerId);
+
+        const movedItemIsGroup = groups.some(g => g.id === selectedLayerId);
+        const movedGroup = movedItemIsGroup ? groups.find(g => g.id === selectedLayerId) : undefined;
+        const parentGroup = movedGroup
+            ? groups.find(g => g.id === movedGroup.parentId)
+            : groups.find(g => g.imageIds.includes(selectedLayerId));
+
+        const items = parentGroup
+            ? getOrderedChildrenOfGroup(parentGroup, images, groups)
+            : displayedLayers;
+        
+        const currentIndex = items.findIndex(l => l.id === selectedLayerId);
         
         if (currentIndex === -1) return { isFirst: true, isLast: true };
         
@@ -439,7 +507,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
             isFirst: currentIndex === 0,
             isLast: currentIndex === items.length - 1
         };
-    }, [selectedLayerId, displayedLayers, groups]);
+    }, [selectedLayerId, displayedLayers, groups, images]);
 
     const handleAnnotationSelect = (imageId: string | null, annotationId: string, e: React.MouseEvent) => {
         onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey });
@@ -466,6 +534,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
           return;
       }
 
+      const layerId = e.dataTransfer.getData('layer-id');
+      const layerType = e.dataTransfer.getData('layer-type');
+
+      if (layerType === 'group' && layerId) {
+          onReparentGroup(layerId, null); // Drop group to top level
+          return;
+      }
+
       const imageIdForUngrouping = e.dataTransfer.getData('image-id-for-ungrouping');
       if (imageIdForUngrouping) {
           onUngroupImages([imageIdForUngrouping]);
@@ -485,7 +561,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
             <div 
                 className={`flex-grow overflow-y-auto p-2 space-y-2 transition-colors ${isMainDragOver ? 'bg-blue-900/20' : ''}`}
                 onDragOver={(e) => {
-                    if (e.dataTransfer.types.includes('application/json') || e.dataTransfer.types.includes('image-id-for-ungrouping')) {
+                    if (e.dataTransfer.types.includes('application/json') || e.dataTransfer.types.includes('layer-id')) {
                         e.preventDefault();
                         setIsMainDragOver(true);
                         e.dataTransfer.dropEffect = 'move';
@@ -499,7 +575,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                 ) : (
                     <>
                         {displayedLayers.map((layer) => {
-                            const isGroup = 'imageIds' in layer;
+                            const isGroup = 'groupIds' in layer;
                             const id = layer.id;
 
                             return (
@@ -554,7 +630,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                             );
                         })}
                         
-                        {[...canvasAnnotations].sort((a,b) => (a.id > b.id ? -1 : 1)).map(anno => (
+                        {/* FIX: Use localeCompare for robust string sorting of annotations. */}
+                        {[...canvasAnnotations].sort((a,b) => String(a.id).localeCompare(String(b.id))).map(anno => (
                             <AnnotationListItem
                                 key={anno.id}
                                 annotation={anno}

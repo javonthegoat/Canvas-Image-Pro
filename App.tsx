@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { LayersPanel } from './components/LayersPanel';
@@ -7,7 +8,7 @@ import { CanvasWrapper } from './components/CanvasWrapper';
 import { FloatingAnnotationEditor } from './components/FloatingAnnotationEditor';
 import { CanvasImage, Rect, AspectRatio, Annotation, AnnotationTool, Point, TextAnnotation, Group } from './types';
 import { readImageFile, downloadDataUrl, createImageElementFromDataUrl } from './utils/fileUtils';
-import { drawAnnotation, getAnnotationBounds, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds } from './utils/canvasUtils';
+import { drawAnnotation, getAnnotationBounds, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds, getGroupBounds } from './utils/canvasUtils';
 
 declare var JSZip: any;
 
@@ -222,6 +223,48 @@ const initialAppState: AppState = {
     expandedImageAnnotationIds: [],
 };
 
+const getAllImageIdsInGroup = (groupId: string, allGroups: Group[]): string[] => {
+    const groupMap = new Map(allGroups.map(g => [g.id, g]));
+    const visited = new Set<string>();
+    const imageIds: string[] = [];
+    const q = [groupId];
+    visited.add(groupId);
+
+    while (q.length > 0) {
+        const currentId = q.shift()!;
+        const currentGroup = groupMap.get(currentId);
+        if (!currentGroup) continue;
+        
+        imageIds.push(...currentGroup.imageIds);
+        currentGroup.groupIds.forEach(childId => {
+            if (!visited.has(childId)) {
+                q.push(childId);
+                visited.add(childId);
+            }
+        });
+    }
+    return imageIds;
+};
+
+const getOrderedChildrenOfGroup = (group: Group, allImages: CanvasImage[], allGroups: Group[]): (Group | CanvasImage)[] => {
+    const childImageItems = group.imageIds.map(id => allImages.find(i => i.id === id)).filter((i): i is CanvasImage => !!i);
+    const childGroupItems = group.groupIds.map(id => allGroups.find(g => g.id === id)).filter((g): g is Group => !!g);
+    const allChildren = [...childImageItems, ...childGroupItems];
+    
+    const imageZIndexMap = new Map(allImages.map((img, i) => [img.id, i]));
+    const getItemMaxZ = (item: Group | CanvasImage): number => {
+        if ('element' in item) {
+            return imageZIndexMap.get(item.id) ?? -Infinity;
+        }
+        const imageIds = getAllImageIdsInGroup(item.id, allGroups);
+        if (imageIds.length === 0) return -Infinity;
+        return Math.max(...imageIds.map(id => imageZIndexMap.get(id) ?? -Infinity));
+    };
+
+    allChildren.sort((a, b) => getItemMaxZ(a) - getItemMaxZ(b));
+    return allChildren;
+};
+
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(initialAppState);
   
@@ -386,7 +429,7 @@ const App: React.FC = () => {
   
   const deleteImage = useCallback((id: string) => {
     const newImages = images.filter(img => img.id !== id);
-    const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(imgId => imgId !== id) })).filter(g => g.imageIds.length > 0);
+    const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(imgId => imgId !== id) })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
     pushHistory({ images: newImages, groups: newGroups, canvasAnnotations });
     setAppState(prev => ({
         ...prev,
@@ -398,7 +441,7 @@ const App: React.FC = () => {
   const deleteSelectedImages = useCallback(() => {
     if (selectedImageIds.length === 0) return;
     const newImages = images.filter(img => !selectedImageIds.includes(img.id));
-    const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)) })).filter(g => g.imageIds.length > 0);
+    const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)) })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
     pushHistory({ images: newImages, groups: newGroups, canvasAnnotations });
     setAppState(prev => ({
         ...prev,
@@ -643,9 +686,9 @@ const App: React.FC = () => {
             const globalP = transformLocalToGlobal(p, oldImage);
             return transformGlobalToLocal(globalP, newImage);
         };
-
-        newAnnotation.scale = (oldImage.scale * newAnnotation.scale) / newImage.scale;
-        newAnnotation.rotation = (oldImage.rotation + newAnnotation.rotation) - newImage.rotation;
+// FIX: Explicitly cast properties from JSON-parsed object to Number to ensure they are numeric for arithmetic operations.
+        newAnnotation.scale = (oldImage.scale * Number(newAnnotation.scale || 1)) / newImage.scale;
+        newAnnotation.rotation = (oldImage.rotation + Number(newAnnotation.rotation || 0)) - newImage.rotation;
 
         switch (newAnnotation.type) {
             case 'rect': case 'text': case 'circle':
@@ -681,76 +724,85 @@ const App: React.FC = () => {
 }, [pushHistory, images, groups, canvasAnnotations]);
 
   const handleReorderLayer = useCallback((layerId: string, move: 'up' | 'down' | 'top' | 'bottom') => {
-    const imageMap = new Map(images.map(img => [img.id, img]));
+    // 1. Find the item being moved and its parent context
+    const movedItemIsGroup = groups.some(g => g.id === layerId);
+    const movedGroup = movedItemIsGroup ? groups.find(g => g.id === layerId) : undefined;
+    const parentGroup = movedGroup
+        ? groups.find(g => g.id === movedGroup.parentId)
+        : groups.find(g => g.imageIds.includes(layerId));
 
-    // 1. Build a list of top-level layer items (groups and ungrouped images) in their current visual order.
-    const topLevelItems: (Group | CanvasImage)[] = [];
-    const processedImageIds = new Set<string>();
-    images.forEach(img => {
-        if (processedImageIds.has(img.id)) return;
-        const groupForImage = groups.find(g => g.imageIds.includes(img.id));
-        if (groupForImage) {
-            if (!topLevelItems.some(item => 'imageIds' in item && item.id === groupForImage.id)) {
-                topLevelItems.push(groupForImage);
-            }
-            groupForImage.imageIds.forEach(id => processedImageIds.add(id));
-        } else {
-            topLevelItems.push(img);
-        }
-    });
-
-    let reorderedImages: CanvasImage[] | null = null;
-    let nextGroups = [...groups];
-
-    const parentGroup = groups.find(g => g.imageIds.includes(layerId));
-    const isGroupMove = groups.some(g => g.id === layerId);
-
-    if (parentGroup && !isGroupMove) {
-        // Reorder image within a group
-        const imageIds = [...parentGroup.imageIds];
-        const currentIndex = imageIds.indexOf(layerId);
-        let newIndex = currentIndex;
-
-        if (move === 'up') newIndex = Math.min(currentIndex + 1, imageIds.length - 1);
-        else if (move === 'down') newIndex = Math.max(0, currentIndex - 1);
-        else if (move === 'top') newIndex = imageIds.length - 1;
-        else if (move === 'bottom') newIndex = 0;
-
-        if (newIndex !== currentIndex) {
-            const [movedId] = imageIds.splice(currentIndex, 1);
-            imageIds.splice(newIndex, 0, movedId);
-            const updatedGroup = { ...parentGroup, imageIds };
-            nextGroups = groups.map(g => g.id === parentGroup.id ? updatedGroup : g);
-        }
+    // 2. Get the correctly ordered list of siblings for the context
+    let siblings: (Group | CanvasImage)[];
+    if (parentGroup) {
+        siblings = getOrderedChildrenOfGroup(parentGroup, images, groups);
     } else {
-        // Reorder top-level item (image or group)
-        const currentIndex = topLevelItems.findIndex(item => item.id === layerId);
-        if (currentIndex === -1) return;
-
-        let newIndex = currentIndex;
-        if (move === 'up') newIndex = Math.min(currentIndex + 1, topLevelItems.length - 1);
-        else if (move === 'down') newIndex = Math.max(0, currentIndex - 1);
-        else if (move === 'top') newIndex = topLevelItems.length - 1;
-        else if (move === 'bottom') newIndex = 0;
-
-        if (newIndex !== currentIndex) {
-            const [movedItem] = topLevelItems.splice(currentIndex, 1);
-            topLevelItems.splice(newIndex, 0, movedItem);
-        }
+        // If no parent, get ordered top-level items
+        const topLevelItems: (Group | CanvasImage)[] = [];
+        const processedIds = new Set<string>();
+        const findRootAncestor = (image: CanvasImage, allGroups: Group[]): CanvasImage | Group => {
+            const groupMap = new Map(allGroups.map(g => [g.id, g]));
+            let parent = allGroups.find(g => g.imageIds.includes(image.id));
+            if (!parent) return image;
+            let root = parent;
+            while (root.parentId) {
+                const nextParent = groupMap.get(root.parentId);
+                if (!nextParent) break;
+                root = nextParent;
+            }
+            return root;
+        };
+        [...images].reverse().forEach(img => {
+            if (processedIds.has(img.id)) return;
+            const ancestor = findRootAncestor(img, groups);
+            if (!topLevelItems.some(item => item.id === ancestor.id)) {
+                topLevelItems.push(ancestor);
+            }
+            if ('groupIds' in ancestor) {
+                getAllImageIdsInGroup(ancestor.id, groups).forEach(id => processedIds.add(id));
+            } else {
+                processedIds.add(ancestor.id);
+            }
+        });
+        siblings = topLevelItems.reverse(); // reverse to get bottom-to-top order
     }
-
-    // Re-flatten everything into a new images array based on the new order.
-    reorderedImages = topLevelItems.flatMap(item => {
-        if ('imageIds' in item) { // is Group
-            const group = nextGroups.find(g => g.id === item.id) || item;
-            return group.imageIds.map(id => imageMap.get(id));
-        }
-        return [item as CanvasImage]; // is CanvasImage
-    }).filter((img): img is CanvasImage => !!img);
     
-    if (reorderedImages) {
-        pushHistory({ images: reorderedImages, groups: nextGroups, canvasAnnotations });
-    }
+    // 3. Perform the reorder on the list of siblings
+    const currentIndex = siblings.findIndex(item => item.id === layerId);
+    if (currentIndex === -1) return;
+
+    let newIndex = currentIndex;
+    if (move === 'up') newIndex = Math.min(currentIndex + 1, siblings.length - 1);
+    else if (move === 'down') newIndex = Math.max(0, currentIndex - 1);
+    else if (move === 'top') newIndex = siblings.length - 1;
+    else if (move === 'bottom') newIndex = 0;
+
+    if (newIndex === currentIndex) return;
+
+    const [movedItem] = siblings.splice(currentIndex, 1);
+    siblings.splice(newIndex, 0, movedItem);
+
+    // 4. Extract all image IDs from the reordered context
+    const allImageIdsInContext = siblings.flatMap(item => 'element' in item ? [item.id] : getAllImageIdsInGroup(item.id, groups));
+
+    // 5. Create a new master `images` array by replacing the old block of images with the new one
+    const originalContextImageIds = new Set(allImageIdsInContext);
+    const imagesOutsideContext = images.filter(img => !originalContextImageIds.has(img.id));
+    const reorderedContextImages = allImageIdsInContext.map(id => images.find(img => img.id === id)).filter((i): i is CanvasImage => !!i);
+
+    // To preserve overall z-order, find where the block of context images should be re-inserted.
+    // The imagesOutsideContext are already in order. We need to find the right splice index.
+    const imageZIndexMap = new Map(images.map((img, i) => [img.id, i]));
+    // FIX: The result of imageZIndexMap.get() might be inferred as 'unknown', so we cast it to a number.
+    const minZOfContext = Math.min(...allImageIdsInContext.map(id => Number(imageZIndexMap.get(id) ?? Infinity)));
+    
+    // FIX: The result of imageZIndexMap.get() might be inferred as 'unknown', so we cast it to a number.
+    let insertionIndex = imagesOutsideContext.findIndex(img => (Number(imageZIndexMap.get(img.id) ?? -1)) > minZOfContext);
+    if (insertionIndex === -1) insertionIndex = imagesOutsideContext.length;
+    
+    const newImages = [...imagesOutsideContext];
+    newImages.splice(insertionIndex, 0, ...reorderedContextImages);
+    
+    pushHistory({ images: newImages, groups, canvasAnnotations });
 }, [images, groups, canvasAnnotations, pushHistory]);
   
   const reorderTopLevelLayer = useCallback((dragId: string, dropId: string) => {
@@ -807,17 +859,41 @@ const App: React.FC = () => {
 
     const visualLayerOrder = useMemo(() => {
         const layerItems: (Group | CanvasImage)[] = [];
-        const processedImageIds = new Set<string>();
+        const processedIds = new Set<string>();
+        const imageIdToGroupMap = new Map<string, Group>();
+        groups.forEach(g => {
+            g.imageIds.forEach(id => imageIdToGroupMap.set(id, g));
+        });
+
         [...images].reverse().forEach(img => {
-            if (processedImageIds.has(img.id)) return;
-            const group = groups.find(g => g.imageIds.includes(img.id));
-            if (group) {
-                if (!layerItems.some(item => 'imageIds' in item && item.id === group.id)) {
-                    layerItems.push(group);
+            if (processedIds.has(img.id)) return;
+            
+            const parentGroup = imageIdToGroupMap.get(img.id);
+
+            if (parentGroup) {
+                let ancestor = parentGroup;
+                while(ancestor.parentId) {
+                    const parent = groups.find(g => g.id === ancestor.parentId);
+                    if (!parent) break;
+                    ancestor = parent;
                 }
-                group.imageIds.forEach(id => processedImageIds.add(id));
+
+                if (!layerItems.some(item => item.id === ancestor.id)) {
+                    layerItems.push(ancestor);
+                }
+                const q = [ancestor];
+                while(q.length > 0) {
+                    const current = q.shift()!;
+                    processedIds.add(current.id);
+                    current.imageIds.forEach(id => processedIds.add(id));
+                    current.groupIds.forEach(id => {
+                        const child = groups.find(g => g.id === id);
+                        if (child) q.push(child);
+                    });
+                }
             } else {
                 layerItems.push(img);
+                processedIds.add(img.id);
             }
         });
         return layerItems;
@@ -854,7 +930,7 @@ const App: React.FC = () => {
 
                     [...groupImages].reverse().forEach(img => {
                         if (expandedImageAnnotationIds.includes(img.id)) {
-                            [...img.annotations].sort((a, b) => (a.id > b.id ? 1 : -1)).forEach(anno => {
+                            [...img.annotations].sort((a, b) => String(a.id).localeCompare(String(b.id))).forEach(anno => {
                                 flatList.push({ imageId: img.id, annotationId: anno.id });
                             });
                         }
@@ -863,14 +939,14 @@ const App: React.FC = () => {
             } else { // is CanvasImage
                 const img = layer as CanvasImage;
                 if (expandedImageAnnotationIds.includes(img.id)) {
-                    [...img.annotations].sort((a, b) => (a.id > b.id ? 1 : -1)).forEach(anno => {
+                    [...img.annotations].sort((a, b) => String(a.id).localeCompare(String(b.id))).forEach(anno => {
                         flatList.push({ imageId: img.id, annotationId: anno.id });
                     });
                 }
             }
         });
     
-        [...canvasAnnotations].sort((a,b) => (a.id > b.id ? -1 : 1)).forEach(anno => {
+        [...canvasAnnotations].sort((a,b) => String(b.id).localeCompare(String(a.id))).forEach(anno => {
             flatList.push({ imageId: null, annotationId: anno.id });
         });
     
@@ -920,7 +996,7 @@ const App: React.FC = () => {
             }
             newSelectedImageIds = Array.from(currentSelection);
         } else {
-             newSelectedImageIds = clickedGroup ? clickedGroup.imageIds : [layerId];
+             newSelectedImageIds = clickedGroup ? getAllImageIdsInGroup(clickedGroup.id, groups) : [layerId];
         }
 
         return {
@@ -935,18 +1011,16 @@ const App: React.FC = () => {
   }, [groups, flatVisualLayerOrder]);
 
   const handleCenterOnLayer = useCallback((layerId: string, layerType: 'image' | 'group') => {
-    let layerToCenter: Group | CanvasImage | undefined;
+    let bounds: Rect | null = null;
     if (layerType === 'image') {
-      layerToCenter = images.find(img => img.id === layerId);
+      const image = images.find(img => img.id === layerId);
+      if (image) bounds = getImagesBounds([image]);
     } else {
-      layerToCenter = groups.find(g => g.id === layerId);
+      const group = groups.find(g => g.id === layerId);
+      if (group) bounds = getGroupBounds(group, groups, images);
     }
-
-    if (layerToCenter) {
-      const bounds = 'imageIds' in layerToCenter
-          ? getImagesBounds((layerToCenter as Group).imageIds.map(id => images.find(img => img.id === id)).filter(Boolean) as CanvasImage[])
-          : getImagesBounds([layerToCenter as CanvasImage]);
-      centerViewOn(bounds);
+    if (bounds) {
+        centerViewOn(bounds);
     }
   }, [images, groups, centerViewOn]);
 
@@ -1047,7 +1121,7 @@ const App: React.FC = () => {
   }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations, resetLastArrangement]);
 
   const arrangeImages = useCallback((direction: 'horizontal' | 'vertical') => {
-    if (selectedImageIds.length < 2) return;
+    if (selectedImageIds.length === 0) return;
 
     const currentArrangement = { type: 'arrange' as const, direction };
     const isSameAsLast = lastArrangement?.type === 'arrange' && lastArrangement?.direction === direction;
@@ -1056,138 +1130,39 @@ const App: React.FC = () => {
         .map(id => images.find(img => img.id === id))
         .filter((img): img is CanvasImage => !!img);
 
-    // Always sort by layer order (top-most layer first)
+    if (selectedImagesInOrder.length === 0) {
+      return;
+    }
+
     const imageIndexMap = new Map(images.map((img, i) => [img.id, i]));
-    selectedImagesInOrder.sort((a, b) => (imageIndexMap.get(b.id) ?? 0) - (imageIndexMap.get(a.id) ?? 0));
+    selectedImagesInOrder.sort((a, b) => (imageIndexMap.get(a.id) ?? 0) - (imageIndexMap.get(b.id) ?? 0));
 
     if (isSameAsLast) {
-        selectedImagesInOrder.reverse(); // Reverse order on second click
+        selectedImagesInOrder.reverse();
     }
-
-    if (selectedImagesInOrder.length < 2) return;
-
+    
     const selectionBounds = getImagesBounds(selectedImagesInOrder);
     if (!selectionBounds) return;
-
-    // 1. Partition into blocks (groups or individual images)
-    type Block = CanvasImage | { group: Group; images: CanvasImage[]; id: string };
-    const partitionedBlocks: Block[] = [];
-    const imageIdToGroup = new Map<string, Group>();
-    groups.forEach(g => g.imageIds.forEach(id => imageIdToGroup.set(id, g)));
-    const processedGroupIds = new Set<string>();
-
-    selectedImagesInOrder.forEach(image => {
-        const group = imageIdToGroup.get(image.id);
-        if (group) {
-            if (!processedGroupIds.has(group.id)) {
-                const imagesInGroup = selectedImagesInOrder.filter(img => imageIdToGroup.get(img.id)?.id === group.id);
-                partitionedBlocks.push({ group, images: imagesInGroup, id: group.id });
-                processedGroupIds.add(group.id);
-            }
-        } else {
-            partitionedBlocks.push(image);
-        }
-    });
     
-    // If there is only one logical block (e.g. all selected images are ungrouped, or all are in one group), use simpler logic.
-    if (partitionedBlocks.length <= 1) {
-        const allNewPositions = arrangeImagesInGrid(selectedImagesInOrder, direction, 0, 0);
-        const virtualImages = selectedImagesInOrder.map(img => ({ ...img, ...allNewPositions[img.id]! }));
-        const newLayoutBounds = getImagesBounds(virtualImages);
-        if (!newLayoutBounds) return;
-        
-        const dx = selectionBounds.x - newLayoutBounds.x;
-        const dy = selectionBounds.y - newLayoutBounds.y;
+    const newPositions = arrangeImagesInGrid(selectedImagesInOrder, direction, 0, 0);
 
-        for (const id in allNewPositions) {
-            allNewPositions[id].x += dx;
-            allNewPositions[id].y += dy;
-        }
-        
-        const newImages = images.map(img => allNewPositions[img.id] ? { ...img, ...allNewPositions[img.id] } : img);
-        pushHistory({ images: newImages, groups, canvasAnnotations });
-        setLastArrangement(isSameAsLast ? null : currentArrangement);
-        return;
-    }
-    
-    // 2. Calculate bounds for each block and arrange them
-    const BLOCK_SPACING = 20;
-
-    const blockLayouts = partitionedBlocks.map(block => {
-        if ('group' in block) {
-            const internalPositions = arrangeImagesInGrid(block.images, direction, 0, 0);
-            const virtualImages = block.images.map(img => ({...img, ...internalPositions[img.id]}));
-            const bounds = getImagesBounds(virtualImages);
-            return { id: block.id, bounds: bounds!, item: block, internalPositions };
-        } else {
-            const bounds = getImagesBounds([block]);
-            return { id: block.id, bounds: bounds!, item: block, internalPositions: null };
-        }
-    }).filter(layout => layout.bounds);
-
-
-    const blockGridPositions = arrangeRectsInGrid(
-        blockLayouts.map(l => ({...l.bounds, id: l.id })),
-        direction,
-        0,
-        0,
-        BLOCK_SPACING
-    );
-
-    // 3. Calculate final positions for all images
-    const allNewPositions: { [id: string]: { x: number; y: number } } = {};
-    const virtualBlocks: Rect[] = [];
-
-    blockLayouts.forEach(layout => {
-        const newBlockPos = blockGridPositions[layout.id];
-        if (!newBlockPos) return;
-
-        virtualBlocks.push({
-            x: newBlockPos.x,
-            y: newBlockPos.y,
-            width: layout.bounds.width,
-            height: layout.bounds.height
-        });
-
-        if ('group' in layout.item) {
-            const dx = newBlockPos.x - layout.bounds.x;
-            const dy = newBlockPos.y - layout.bounds.y;
-            layout.item.images.forEach(img => {
-                const internalPos = layout.internalPositions![img.id];
-                allNewPositions[img.id] = {
-                    x: internalPos.x + dx,
-                    y: internalPos.y + dy
-                };
-            });
-        } else {
-            allNewPositions[layout.item.id] = newBlockPos;
-        }
-    });
-
-    // 4. Align the whole new layout to the original selection's top-left corner
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    virtualBlocks.forEach(rect => {
-        minX = Math.min(minX, rect.x);
-        minY = Math.min(minY, rect.y);
-        maxX = Math.max(maxX, rect.x + rect.width);
-        maxY = Math.max(maxY, rect.y + rect.height);
-    });
-    
-    if (minX === Infinity) return;
-    const newLayoutBounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    const virtualImages = selectedImagesInOrder.map(img => ({ ...img, ...newPositions[img.id] }));
+    const newLayoutBounds = getImagesBounds(virtualImages);
+    if (!newLayoutBounds) return;
 
     const finalDx = selectionBounds.x - newLayoutBounds.x;
     const finalDy = selectionBounds.y - newLayoutBounds.y;
 
-    for (const id in allNewPositions) {
-        allNewPositions[id].x += finalDx;
-        allNewPositions[id].y += finalDy;
+    for (const id in newPositions) {
+        newPositions[id].x += finalDx;
+        newPositions[id].y += finalDy;
     }
-    
-    // 5. Apply and commit
-    const newImages = images.map(img => allNewPositions[img.id] ? { ...img, ...allNewPositions[img.id] } : img);
-    pushHistory({ images: newImages, groups, canvasAnnotations });
 
+    const newImages = images.map(img =>
+        newPositions[img.id] ? { ...img, ...newPositions[img.id] } : img
+    );
+    
+    pushHistory({ images: newImages, groups, canvasAnnotations });
     setLastArrangement(isSameAsLast ? null : currentArrangement);
   }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations, lastArrangement]);
 
@@ -1375,7 +1350,6 @@ const App: React.FC = () => {
               return { x: newLocalX, y: newLocalY };
           };
 
-          // FIX: The properties are already numbers per the types, so Number() is redundant and may confuse the type checker.
           newAnno.scale = annotation.scale * imageToCrop.scale;
           newAnno.rotation = annotation.rotation + imageToCrop.rotation;
 
@@ -1446,7 +1420,7 @@ const App: React.FC = () => {
             }
         });
         return { ...g, imageIds: newImageIds };
-    }).filter(g => g.imageIds.length > 0);
+    }).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
 
     pushHistory({ images: nextImages, groups: nextGroups, canvasAnnotations });
     
@@ -1465,7 +1439,6 @@ const App: React.FC = () => {
       const newImages = images.map(img => {
           if (idsToUncrop.has(img.id) && img.uncroppedFromId && archivedImages[img.uncroppedFromId]) {
               const original = { ...archivedImages[img.uncroppedFromId] };
-              // FIX: The properties are already numbers per the types, so Number() is redundant and may confuse the type checker.
               original.x = img.x + (img.width / 2) - (original.width * original.scale / 2);
               original.y = img.y + (img.height / 2) - (original.height * original.scale / 2);
               newSelection.push(original.id);
@@ -1831,13 +1804,23 @@ const App: React.FC = () => {
           ]);
           
           const imageIdSet = new Set(newImages.map(img => img.id));
-          const sanitizedGroups: Group[] = Array.isArray(loadedGroups) ? loadedGroups.map((g: any): Group => ({
-            id: typeof g.id === 'string' ? g.id : `group-${Date.now()}-${Math.random()}`,
-            name: typeof g.name === 'string' ? g.name : 'Untitled Group',
-            // FIX: Ensure loaded imageIds are properly filtered and typed as string[]
-            imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: unknown): id is string => typeof id === 'string' && imageIdSet.has(id)) : [],
-            isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
-          })) : [];
+          // FIX: Add check for g being an object and filter out nulls to safely handle malformed project data.
+// FIX: Removed unnecessary 'as any[]' cast to allow for proper type inference.
+          const sanitizedGroups: Group[] = Array.isArray(loadedGroups) ? loadedGroups.map((g: any): Group | null => {
+            if (typeof g !== 'object' || g === null) return null;
+            return {
+              id: typeof g.id === 'string' ? g.id : `group-${Date.now()}-${Math.random()}`,
+              name: typeof g.name === 'string' ? g.name : 'Untitled Group',
+              label: typeof g.label === 'string' ? g.label : (g.name || 'Untitled Group'),
+              showLabel: typeof g.showLabel === 'boolean' ? g.showLabel : true,
+// FIX: Changed type annotation for filter parameter from 'unknown' to 'any' to ensure correct type inference.
+              imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: any): id is string => typeof id === 'string' && imageIdSet.has(id)) : [],
+// FIX: Changed type annotation for filter parameter from 'unknown' to 'any' to ensure correct type inference.
+              groupIds: Array.isArray(g.groupIds) ? g.groupIds.filter((id: any): id is string => typeof id === 'string') : [],
+              isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
+              parentId: typeof g.parentId === 'string' ? g.parentId : null,
+            };
+          }).filter((g): g is Group => g !== null) : [];
 
           const newHistoryEntry: HistoryEntry = {
               images: newImages,
@@ -1942,8 +1925,9 @@ const App: React.FC = () => {
         const targetRotation = targetImage?.rotation ?? 0;
         const targetScale = targetImage?.scale ?? 1;
 
-        newAnnotation.rotation = (sourceRotation + Number(newAnnotation.rotation || 0)) - targetRotation;
-        newAnnotation.scale = (sourceScale * Number(newAnnotation.scale || 1)) / targetScale;
+        // FIX: Explicitly cast properties from JSON-parsed object to Number to ensure they are numeric for arithmetic operations.
+        newAnnotation.rotation = (sourceRotation + (Number(newAnnotation.rotation || 0))) - targetRotation;
+        newAnnotation.scale = (sourceScale * (Number(newAnnotation.scale || 1))) / targetScale;
 
         newAnnotations.push(newAnnotation);
         newSelections.push({ imageId: targetImage?.id ?? null, annotationId: newId });
@@ -2150,16 +2134,21 @@ const App: React.FC = () => {
   const createGroupFromSelection = useCallback(() => {
     if (selectedImageIds.length < 1) return;
     
+    const newName = `Group ${groups.length + 1}`;
     const newGroup: Group = {
         id: `group-${Date.now()}`,
-        name: `Group ${groups.length + 1}`,
+        name: newName,
+        label: newName,
+        showLabel: true,
         imageIds: selectedImageIds,
+        groupIds: [],
         isExpanded: true,
+        parentId: null,
     };
     const updatedGroups = groups.map(g => ({
         ...g,
         imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)),
-    })).filter(g => g.imageIds.length > 0);
+    })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
     
     pushHistory({ images, groups: [...updatedGroups, newGroup], canvasAnnotations });
     
@@ -2171,12 +2160,52 @@ const App: React.FC = () => {
   }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations]);
 
   const deleteGroup = useCallback((groupId: string) => {
-    const newGroups = groups.filter(g => g.id !== groupId);
-    pushHistory({ images, groups: newGroups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
+    const groupToDelete = groups.find(g => g.id === groupId);
+    if (!groupToDelete) return;
+
+    let nextGroups = [...groups];
+
+    // Reparent children to the deleted group's parent
+    const newParentId = groupToDelete.parentId;
+
+    // Reparent child groups
+    nextGroups = nextGroups.map(g => 
+        groupToDelete.groupIds.includes(g.id) ? { ...g, parentId: newParentId } : g
+    );
+
+    // Add children to the new parent's lists (if it exists)
+    if (newParentId) {
+        nextGroups = nextGroups.map(g => {
+            if (g.id === newParentId) {
+                return {
+                    ...g,
+                    imageIds: [...g.imageIds, ...groupToDelete.imageIds],
+                    groupIds: [...g.groupIds, ...groupToDelete.groupIds],
+                };
+            }
+            return g;
+        });
+    }
+
+    // Finally, filter out the deleted group
+    nextGroups = nextGroups.filter(g => g.id !== groupId);
+
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
+}, [pushHistory, images, groups, canvasAnnotations]);
+
 
   const renameGroup = useCallback((groupId: string, newName: string) => {
     const newGroups = groups.map(g => g.id === groupId ? { ...g, name: newName } : g);
+    pushHistory({ images: newGroups, groups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
+  const renameGroupLabel = useCallback((groupId: string, newLabel: string) => {
+    const newGroups = groups.map(g => g.id === groupId ? { ...g, label: newLabel } : g);
+    pushHistory({ images, groups: newGroups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
+  const toggleGroupLabel = useCallback((groupId: string) => {
+    const newGroups = groups.map(g => g.id === groupId ? { ...g, showLabel: !g.showLabel } : g);
     pushHistory({ images, groups: newGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
@@ -2206,19 +2235,51 @@ const App: React.FC = () => {
     const imageToAdd = images.find(img => img.id === imageId);
     if (!imageToAdd) return;
 
+    // Remove from all other groups
     const groupsWithoutImage = groups.map(g => ({
         ...g,
         imageIds: g.imageIds.filter(id => id !== imageId)
     }));
 
-    const targetGroup = groupsWithoutImage.find(g => g.id === groupId);
-    if (!targetGroup) return;
-
+    // Add to target group
     const updatedGroups = groupsWithoutImage.map(g =>
         g.id === groupId ? { ...g, imageIds: [...g.imageIds, imageId] } : g
     );
 
     pushHistory({ images, groups: updatedGroups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
+  const reparentGroup = useCallback((childGroupId: string, newParentId: string | null) => {
+    let nextGroups = [...groups];
+    const childGroup = nextGroups.find(g => g.id === childGroupId);
+    if (!childGroup) return;
+
+    let current = newParentId;
+    while(current) {
+        if (current === childGroupId) return; // invalid move
+        current = nextGroups.find(g => g.id === current)?.parentId ?? null;
+    }
+
+    const oldParentId = childGroup.parentId;
+
+    // 1. Update child's parentId
+    nextGroups = nextGroups.map(g => g.id === childGroupId ? { ...g, parentId: newParentId } : g);
+
+    // 2. Remove from old parent
+    if (oldParentId) {
+        nextGroups = nextGroups.map(g => 
+            g.id === oldParentId ? { ...g, groupIds: g.groupIds.filter(id => id !== childGroupId) } : g
+        );
+    }
+    
+    // 3. Add to new parent
+    if (newParentId) {
+         nextGroups = nextGroups.map(g => 
+            g.id === newParentId && !g.groupIds.includes(childGroupId) ? { ...g, groupIds: [...g.groupIds, childGroupId] } : g
+        );
+    }
+
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
   const ungroupImages = useCallback((imageIdsToUngroup: string[]) => {
@@ -2228,7 +2289,7 @@ const App: React.FC = () => {
     const nextGroups = groups.map(g => {
         const newImageIds = g.imageIds.filter(id => !idsSet.has(id));
         return { ...g, imageIds: newImageIds };
-    }).filter(g => g.imageIds.length > 0);
+    }).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
 
     pushHistory({ images, groups: nextGroups, canvasAnnotations });
     setAppState(prev => ({ ...prev, selectedImageIds: imageIdsToUngroup, selectedLayerId: imageIdsToUngroup.length === 1 ? imageIdsToUngroup[0] : null }));
@@ -2250,7 +2311,6 @@ const App: React.FC = () => {
         setActiveTool={setActiveTool}
         toolOptions={toolOptions}
         setToolOptions={setToolOptions}
-        // FIX: Pass handleCropToView instead of undefined onCropToView
         onCropToView={handleCropToView}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -2350,6 +2410,9 @@ const App: React.FC = () => {
           parentImageIds={parentImageIds}
           expandedImageAnnotationIds={expandedImageAnnotationIds}
           onToggleImageAnnotationsExpanded={toggleImageAnnotationsExpanded}
+          onReparentGroup={reparentGroup}
+          onRenameGroupLabel={renameGroupLabel}
+          onToggleGroupLabel={toggleGroupLabel}
         />
         <FloatingAnnotationEditor
           ref={floatingEditorRef}
