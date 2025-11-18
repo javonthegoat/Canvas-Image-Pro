@@ -1,6 +1,6 @@
 # Canvas Image Pro
 
-An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation, rotation, and scaling of multiple images with intuitive controls and a modern interface.
+An interactive web applet for advanced image manipulation, featuring an infinite canvas for cropping, annotation,rotation, and scaling of multiple images with intuitive controls and a modern interface.
 
 <!-- ![Canvas Image Pro Screenshot](path/to/screenshot.png) -->
 
@@ -13,7 +13,10 @@ An interactive web applet for advanced image manipulation, featuring an infinite
 - **Full History**: Never lose your work with a robust undo/redo system that tracks every action.
 
 ### Advanced Layering & Grouping
-- **Intuitive Layer List**: Manage all images and canvas-level annotations in a clear, hierarchical list.
+- **Intuitive Layer List**: Manage all images, groups, and annotations in a clear, hierarchical list.
+- **Advanced Search & Filtering**: Instantly find layers by name, and apply tag-based filters to pinpoint specific images within your project.
+- **Image Tagging**: Assign custom tags (e.g., "background", "character", "v2") to image layers for better organization and powerful searching.
+- **Flexible Sorting & Ordering**: Re-sort the layer panel by creation date (newest/oldest) or instantly reverse the stacking order of all layers on the canvas with a single click.
 - **Drag & Drop Reordering**: Easily change the stacking order of images and groups by dragging them in the layer list.
 - **Full Layer Control**: Precisely reorder layers using 'Bring to Front', 'Send to Back', 'Move Forward', and 'Move Backward' controls.
 - **Image Grouping**: Select multiple images and group them into collapsible folders for streamlined organization and manipulation.

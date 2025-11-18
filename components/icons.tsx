@@ -184,9 +184,9 @@ export const DistributeHorizontalIcon: React.FC<{ className?: string }> = ({ cla
 );
 export const DistributeVerticalIcon: React.FC<{ className?: string }> = ({ className }) => (
     <Icon className={className}>
-        <path d="M5 15v-6a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
-        <path d="M5 5V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
-        <path d="M5 20v-1a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+        <path d="M5 15v-6a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1-1H6a1 1 0 0 1-1-1z" />
+        <path d="M5 5V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1-1H6a1 1 0 0 1-1-1z" />
+        <path d="M5 20v-1a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1a1 1 0 0 1-1-1H6a1 1 0 0 1-1-1z" />
     </Icon>
 );
 export const MatchWidthIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -232,4 +232,36 @@ export const SlidersIcon: React.FC<{ className?: string }> = ({ className }) => 
       <line x1="9" y1="8" x2="15" y2="8" />
       <line x1="17" y1="16" x2="23" y2="16" />
     </Icon>
+);
+
+export const SearchIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></Icon>
+);
+
+export const ChevronsUpDownIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <Icon className={className}><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></Icon>
+);
+
+export const TagIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <Icon className={className}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></Icon>
+);
+
+export const SortAscendingIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <Icon className={className}>
+    <path d="M3 12h4" />
+    <path d="M3 6h10" />
+    <path d="M3 18h6" />
+    <path d="m21 9-3-3-3 3" />
+    <path d="M18 18V6" />
+  </Icon>
+);
+
+export const SortDescendingIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <Icon className={className}>
+    <path d="M3 12h4" />
+    <path d="M3 6h10" />
+    <path d="M3 18h6" />
+    <path d="m21 15-3 3-3-3" />
+    <path d="M18 6v12" />
+  </Icon>
 );

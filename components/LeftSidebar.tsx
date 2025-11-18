@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, AspectRatio, AnnotationTool, Rect, Annotation, TextAnnotation, Group } from '../types';
 import { UploadIcon, ZoomInIcon, ZoomOutIcon, RotateCwIcon, CropIcon, PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, UndoIcon, RedoIcon, ArrowIcon, XIcon, SendToBackIcon, ChevronDownIcon, ChevronUpIcon, BringToFrontIcon, AlignLeftIcon, AlignHorizontalCenterIcon, AlignRightIcon, AlignTopIcon, AlignVerticalCenterIcon, AlignBottomIcon, CopyIcon, DownloadIcon, LineIcon, ArrangeHorizontalIcon, ArrangeVerticalIcon, EyedropperIcon, MaximizeIcon, SaveIcon, FolderOpenIcon, LayersIcon, DistributeHorizontalIcon, DistributeVerticalIcon, MatchWidthIcon, MatchHeightIcon, StackHorizontalIcon, StackVerticalIcon, SlidersIcon } from './icons';
@@ -36,6 +37,7 @@ interface LeftSidebarProps {
   onCreateGroup: () => void;
   images: CanvasImage[];
   onDownloadSelectedImages: () => void;
+  isDirty: boolean;
 }
 
 const TabButton: React.FC<{
@@ -77,7 +79,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
     onUndo, onRedo, canUndo, canRedo,
     onAlignImages, onArrangeImages, onStackImages, onMatchImageSizes, exportFormat, setExportFormat, onFitCropToImage,
     isLocked, onClearAllCanvas, onDownloadAllCanvas, onUncrop,
-    onSaveProject, onLoadProject, onCreateGroup, images, onDownloadSelectedImages
+    onSaveProject, onLoadProject, onCreateGroup, images, onDownloadSelectedImages, isDirty,
   } = props;
 
   const [activeTab, setActiveTab] = useState<'tools' | 'project'>('tools');
@@ -444,8 +446,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                          <button onClick={handleLoadProjectClick} disabled={isDisabled} title="Load Project File (.cpro)" className="flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
                             <FolderOpenIcon /> <span className="ml-2">Load</span>
                         </button>
-                        <button onClick={onSaveProject} disabled={images.length === 0} className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
+                        <button onClick={onSaveProject} disabled={images.length === 0} className="relative flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
                             <SaveIcon /> <span className="ml-2">Save</span>
+                            {isDirty && <span title="Unsaved changes" className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-400 rounded-full"></span>}
                         </button>
                     </div>
                 </div>

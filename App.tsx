@@ -1,6 +1,5 @@
 
 
-
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { LayersPanel } from './components/LayersPanel';
@@ -193,7 +192,9 @@ interface HistoryEntry {
 interface AppState {
     history: HistoryEntry[];
     historyIndex: number;
+    savedHistoryIndex: number;
     liveImages: CanvasImage[] | null;
+    liveCanvasAnnotations: Annotation[] | null;
     archivedImages: Record<string, CanvasImage>;
     selectedImageIds: string[];
     selectedAnnotations: AnnotationSelection[];
@@ -210,7 +211,9 @@ const initialHistoryEntry: HistoryEntry = { images: [], groups: [], canvasAnnota
 const initialAppState: AppState = {
     history: [initialHistoryEntry],
     historyIndex: 0,
+    savedHistoryIndex: 0,
     liveImages: null,
+    liveCanvasAnnotations: null,
     archivedImages: {},
     selectedImageIds: [],
     selectedAnnotations: [],
@@ -269,15 +272,17 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(initialAppState);
   
   const { 
-    history, historyIndex, liveImages, archivedImages, selectedImageIds, 
+    history, historyIndex, savedHistoryIndex, liveImages, liveCanvasAnnotations, archivedImages, selectedImageIds, 
     selectedAnnotations, selectedLayerId, cropArea, viewTransform, selectionMethod, 
     lastClickedLayerId, expandedImageAnnotationIds, lastClickedAnnotation
   } = appState;
 
+  const isDirty = historyIndex !== savedHistoryIndex;
+
   const currentHistoryState = history[historyIndex];
   const images = liveImages ?? currentHistoryState.images;
   const groups = currentHistoryState.groups;
-  const canvasAnnotations = currentHistoryState.canvasAnnotations;
+  const canvasAnnotations = liveCanvasAnnotations ?? currentHistoryState.canvasAnnotations;
 
   const [lastArrangement, setLastArrangement] = useState<LastArrangement>(null);
   const [clipboard, setClipboard] = useState<{ selections: AnnotationSelection[] } | null>(null);
@@ -295,7 +300,8 @@ const App: React.FC = () => {
             ...current,
             history: newHistory,
             historyIndex: newHistory.length - 1,
-            liveImages: null
+            liveImages: null,
+            liveCanvasAnnotations: null,
         };
     });
   }, []);
@@ -304,6 +310,13 @@ const App: React.FC = () => {
     setAppState(current => {
       const baseImages = current.liveImages ?? current.history[current.historyIndex].images;
       return { ...current, liveImages: updater(baseImages) };
+    });
+  }, []);
+
+  const setCanvasAnnotationsForInteraction = useCallback((updater: (prevAnnos: Annotation[]) => Annotation[]) => {
+    setAppState(current => {
+        const baseAnnos = current.liveCanvasAnnotations ?? current.history[current.historyIndex].canvasAnnotations;
+        return { ...current, liveCanvasAnnotations: updater(baseAnnos) };
     });
   }, []);
 
@@ -324,14 +337,14 @@ const App: React.FC = () => {
 
   const commitInteraction = useCallback(() => {
     resetLastArrangement();
-    if (liveImages) {
+    if (liveImages || liveCanvasAnnotations) {
         pushHistory({
-            images: liveImages,
+            images: liveImages ?? images,
             groups: groups,
-            canvasAnnotations: canvasAnnotations
+            canvasAnnotations: liveCanvasAnnotations ?? canvasAnnotations,
         });
     }
-  }, [liveImages, groups, canvasAnnotations, pushHistory, resetLastArrangement]);
+  }, [liveImages, liveCanvasAnnotations, images, groups, canvasAnnotations, pushHistory, resetLastArrangement]);
   
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -341,6 +354,7 @@ const App: React.FC = () => {
       setAppState(prev => ({ 
         ...prev, 
         liveImages: null,
+        liveCanvasAnnotations: null,
         historyIndex: prev.historyIndex - 1,
         selectedImageIds: [],
         selectedAnnotations: [],
@@ -355,6 +369,7 @@ const App: React.FC = () => {
       setAppState(prev => ({ 
         ...prev, 
         liveImages: null,
+        liveCanvasAnnotations: null,
         historyIndex: prev.historyIndex + 1,
         selectedImageIds: [],
         selectedAnnotations: [],
@@ -512,20 +527,53 @@ const App: React.FC = () => {
     }
 
     if (canvasAnnotationIds.length > 0) {
-        setAppState(prev => ({
-            ...prev,
-            history: prev.history.map((entry, index) => {
-                if (index !== prev.historyIndex) return entry;
+        setCanvasAnnotationsForInteraction(prev => 
+            prev.map(anno =>
+                canvasAnnotationIds.includes(anno.id) ? { ...anno, ...changes } as Annotation : anno
+            )
+        );
+    }
+  }, [setImagesForInteraction, setCanvasAnnotationsForInteraction, selectedAnnotations]);
+
+  const updateMultipleAnnotationsForInteraction = useCallback((updates: Array<{ selection: AnnotationSelection; changes: Partial<Annotation> }>) => {
+    const updatesByImageId: Record<string, Array<{ annotationId: string; changes: Partial<Annotation> }>> = {};
+    const canvasUpdates: Array<{ annotationId: string; changes: Partial<Annotation> }> = [];
+
+    updates.forEach(({ selection, changes }) => {
+        if (selection.imageId) {
+            if (!updatesByImageId[selection.imageId]) {
+                updatesByImageId[selection.imageId] = [];
+            }
+            updatesByImageId[selection.imageId].push({ annotationId: selection.annotationId, changes });
+        } else {
+            canvasUpdates.push({ annotationId: selection.annotationId, changes });
+        }
+    });
+
+    if (Object.keys(updatesByImageId).length > 0) {
+        setImagesForInteraction(prev => prev.map(img => {
+            if (updatesByImageId[img.id]) {
+                const annoUpdates = new Map(updatesByImageId[img.id].map(u => [u.annotationId, u.changes]));
                 return {
-                    ...entry,
-                    canvasAnnotations: entry.canvasAnnotations.map(anno =>
-                        canvasAnnotationIds.includes(anno.id) ? { ...anno, ...changes } as Annotation : anno
+                    ...img,
+                    annotations: img.annotations.map(anno =>
+                        annoUpdates.has(anno.id) ? { ...anno, ...annoUpdates.get(anno.id) } as Annotation : anno
                     )
                 };
-            })
+            }
+            return img;
         }));
     }
-  }, [setImagesForInteraction, selectedAnnotations]);
+
+    if (canvasUpdates.length > 0) {
+        setCanvasAnnotationsForInteraction(prev => {
+            const annoUpdates = new Map(canvasUpdates.map(u => [u.annotationId, u.changes]));
+            return prev.map(anno =>
+                annoUpdates.has(anno.id) ? { ...anno, ...annoUpdates.get(anno.id) } as Annotation : anno
+            );
+        });
+    }
+  }, [setImagesForInteraction, setCanvasAnnotationsForInteraction]);
 
   const deleteSelectedAnnotations = useCallback(() => {
     if (selectedAnnotations.length === 0) return;
@@ -686,9 +734,9 @@ const App: React.FC = () => {
             const globalP = transformLocalToGlobal(p, oldImage);
             return transformGlobalToLocal(globalP, newImage);
         };
-// FIX: Explicitly cast properties from JSON-parsed object to Number to ensure they are numeric for arithmetic operations.
-        newAnnotation.scale = (oldImage.scale * Number(newAnnotation.scale || 1)) / newImage.scale;
-        newAnnotation.rotation = (oldImage.rotation + Number(newAnnotation.rotation || 0)) - newImage.rotation;
+        // Cast properties to Number and add fallbacks to prevent arithmetic errors on potentially non-numeric types from deserialized data.
+        newAnnotation.scale = (Number((oldImage.scale || 1) as any) * Number((newAnnotation.scale || 1) as any)) / Number((newImage.scale || 1) as any);
+        newAnnotation.rotation = (Number((oldImage.rotation || 0) as any) + Number((newAnnotation.rotation || 0) as any)) - Number((newImage.rotation || 0) as any);
 
         switch (newAnnotation.type) {
             case 'rect': case 'text': case 'circle':
@@ -792,10 +840,8 @@ const App: React.FC = () => {
     // To preserve overall z-order, find where the block of context images should be re-inserted.
     // The imagesOutsideContext are already in order. We need to find the right splice index.
     const imageZIndexMap = new Map(images.map((img, i) => [img.id, i]));
-    // FIX: The result of imageZIndexMap.get() might be inferred as 'unknown', so we cast it to a number.
     const minZOfContext = Math.min(...allImageIdsInContext.map(id => Number(imageZIndexMap.get(id) ?? Infinity)));
     
-    // FIX: The result of imageZIndexMap.get() might be inferred as 'unknown', so we cast it to a number.
     let insertionIndex = imagesOutsideContext.findIndex(img => (Number(imageZIndexMap.get(img.id) ?? -1)) > minZOfContext);
     if (insertionIndex === -1) insertionIndex = imagesOutsideContext.length;
     
@@ -1395,6 +1441,7 @@ const App: React.FC = () => {
         originalHeight: imageToCrop.originalHeight,
         originalWidth: imageToCrop.originalWidth,
         cropRect: null,
+        tags: imageToCrop.tags,
       };
       newCroppedImages.push(newImage);
       idMap[imageToCrop.id] = newImage.id;
@@ -1614,8 +1661,26 @@ const App: React.FC = () => {
   }, [viewTransform]);
 
   const handleClearAllCanvas = useCallback(() => {
-    setAppState(initialAppState);
-  }, []);
+    const isPristine =
+        historyIndex === 0 &&
+        history.length === 1 &&
+        images.length === 0 &&
+        groups.length === 0 &&
+        canvasAnnotations.length === 0;
+
+    if (!isPristine) {
+        pushHistory(initialHistoryEntry);
+        setAppState(prev => ({
+            ...prev,
+            selectedImageIds: [],
+            selectedAnnotations: [],
+            selectedLayerId: null,
+            lastClickedLayerId: null,
+            lastClickedAnnotation: null,
+            cropArea: null,
+        }));
+    }
+  }, [history, historyIndex, images, groups, canvasAnnotations, pushHistory]);
 
   const generateImageWithAnnotations = useCallback((image: CanvasImage, mimeType: string): string => {
     const tempCanvas = document.createElement('canvas');
@@ -1736,7 +1801,7 @@ const App: React.FC = () => {
 
     const serializeImageObject = (img: CanvasImage) => {
         const { element, ...rest } = img;
-        return { ...rest, annotations: img.annotations || [], dataUrl: img.element.src };
+        return { ...rest, annotations: img.annotations || [], tags: img.tags || [], dataUrl: img.element.src };
     };
 
     const serializableImages = images.map(serializeImageObject);
@@ -1762,10 +1827,11 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     downloadDataUrl(url, 'canvas-project.cpro');
     URL.revokeObjectURL(url);
+    setAppState(prev => ({ ...prev, savedHistoryIndex: prev.historyIndex }));
   }, [images, groups, canvasAnnotations, archivedImages, viewTransform, cropArea]);
 
   const handleLoadProject = useCallback(async (file: File) => {
-      if (!window.confirm("Loading a project will clear your current canvas. Are you sure you want to continue?")) {
+      if (isDirty && !window.confirm("Loading a project will clear your current unsaved changes. Are you sure you want to continue?")) {
           return;
       }
 
@@ -1784,7 +1850,7 @@ const App: React.FC = () => {
           const deserializeImageData = async (data: SerializedImage): Promise<CanvasImage> => {
               const element = await createImageElementFromDataUrl(data.dataUrl);
               const { dataUrl, ...rest } = data;
-              return { ...rest, annotations: data.annotations || [], createdAt: new Date(rest.createdAt), element };
+              return { ...rest, annotations: data.annotations || [], tags: Array.isArray(data.tags) ? data.tags : [], createdAt: new Date(rest.createdAt), element };
           };
           
           const deserializeArchived = async (archivedData: Record<string, SerializedImage>) => {
@@ -1804,8 +1870,13 @@ const App: React.FC = () => {
           ]);
           
           const imageIdSet = new Set(newImages.map(img => img.id));
-          // FIX: Add check for g being an object and filter out nulls to safely handle malformed project data.
-// FIX: Removed unnecessary 'as any[]' cast to allow for proper type inference.
+          const groupIdSet = new Set(
+            Array.isArray(loadedGroups)
+              ? loadedGroups
+                  .map((g: any) => g?.id)
+                  .filter((id: any): id is string => typeof id === 'string')
+              : []
+          );
           const sanitizedGroups: Group[] = Array.isArray(loadedGroups) ? loadedGroups.map((g: any): Group | null => {
             if (typeof g !== 'object' || g === null) return null;
             return {
@@ -1813,12 +1884,11 @@ const App: React.FC = () => {
               name: typeof g.name === 'string' ? g.name : 'Untitled Group',
               label: typeof g.label === 'string' ? g.label : (g.name || 'Untitled Group'),
               showLabel: typeof g.showLabel === 'boolean' ? g.showLabel : true,
-// FIX: Changed type annotation for filter parameter from 'unknown' to 'any' to ensure correct type inference.
-              imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: any): id is string => typeof id === 'string' && imageIdSet.has(id)) : [],
-// FIX: Changed type annotation for filter parameter from 'unknown' to 'any' to ensure correct type inference.
-              groupIds: Array.isArray(g.groupIds) ? g.groupIds.filter((id: any): id is string => typeof id === 'string') : [],
+              // Ensure properties from deserialized data are of the correct type and valid.
+              imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: unknown): id is string => typeof id === 'string' && imageIdSet.has(id as string)) : [],
+              groupIds: Array.isArray(g.groupIds) ? g.groupIds.filter((id: unknown): id is string => typeof id === 'string' && groupIdSet.has(id as string)) : [],
               isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
-              parentId: typeof g.parentId === 'string' ? g.parentId : null,
+              parentId: typeof g.parentId === 'string' && groupIdSet.has(g.parentId) ? g.parentId : null,
             };
           }).filter((g): g is Group => g !== null) : [];
 
@@ -1831,7 +1901,9 @@ const App: React.FC = () => {
           setAppState({
               history: [newHistoryEntry],
               historyIndex: 0,
+              savedHistoryIndex: 0,
               liveImages: null,
+              liveCanvasAnnotations: null,
               archivedImages: newArchivedImages || {},
               selectedImageIds: [],
               selectedAnnotations: [],
@@ -1848,7 +1920,7 @@ const App: React.FC = () => {
           console.error("Failed to load project:", error);
           alert("Failed to load project file. It might be corrupted or in an invalid format.");
       }
-  }, []);
+  }, [isDirty]);
 
   const handleCopy = useCallback(() => {
     if (selectedAnnotations.length > 0) {
@@ -1925,9 +1997,9 @@ const App: React.FC = () => {
         const targetRotation = targetImage?.rotation ?? 0;
         const targetScale = targetImage?.scale ?? 1;
 
-        // FIX: Explicitly cast properties from JSON-parsed object to Number to ensure they are numeric for arithmetic operations.
-        newAnnotation.rotation = (sourceRotation + (Number(newAnnotation.rotation || 0))) - targetRotation;
-        newAnnotation.scale = (sourceScale * (Number(newAnnotation.scale || 1))) / targetScale;
+        // Cast properties to Number to prevent arithmetic errors on potentially non-numeric types from deserialized data.
+        newAnnotation.rotation = (Number(sourceRotation as any) + Number((newAnnotation.rotation || 0) as any)) - Number(targetRotation as any);
+        newAnnotation.scale = (Number(sourceScale as any) * Number((newAnnotation.scale || 1) as any)) / Number(targetScale as any);
 
         newAnnotations.push(newAnnotation);
         newSelections.push({ imageId: targetImage?.id ?? null, annotationId: newId });
@@ -1950,6 +2022,19 @@ const App: React.FC = () => {
     setAppState(prev => ({ ...prev, selectedAnnotations: newSelections, selectedImageIds: [] }));
 
 }, [clipboard, images, groups, canvasAnnotations, pushHistory, viewTransform.scale]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+        if (isDirty) {
+            e.preventDefault();
+            e.returnValue = ''; // Required for Chrome.
+        }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isDirty]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2008,7 +2093,7 @@ const App: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedImageIds, deleteSelectedImages, handleUndo, handleRedo, selectedAnnotations, deleteSelectedAnnotations, cropArea, handleCopyToClipboard, setActiveTool, handleCrop, handleCopy, handlePaste]);
+  }, [selectedImageIds, deleteSelectedImages, handleUndo, handleRedo, selectedAnnotations, deleteSelectedAnnotations, cropArea, handleCopyToClipboard, setActiveTool, handleCrop, handleCopy, handlePaste, clipboard]);
 
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
@@ -2297,6 +2382,36 @@ const App: React.FC = () => {
   
   const parentImageIds = useMemo(() => new Set(selectedAnnotations.filter(sel => sel.imageId).map(sel => sel.imageId!)), [selectedAnnotations]);
 
+  const handleReverseLayerOrder = useCallback(() => {
+    pushHistory({ images: [...images].reverse(), groups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+  
+  const handleAddTag = useCallback((imageId: string, tag: string) => {
+    const newImages = images.map(img => {
+      if (img.id === imageId) {
+        const newTags = [...(img.tags || [])];
+        if (!newTags.includes(tag)) {
+          newTags.push(tag);
+        }
+        return { ...img, tags: newTags };
+      }
+      return img;
+    });
+    pushHistory({ images: newImages, groups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
+  const handleRemoveTag = useCallback((imageId: string, tagIndex: number) => {
+    const newImages = images.map(img => {
+      if (img.id === imageId) {
+        const newTags = [...(img.tags || [])];
+        newTags.splice(tagIndex, 1);
+        return { ...img, tags: newTags };
+      }
+      return img;
+    });
+    pushHistory({ images: newImages, groups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
   return (
     <div className="flex h-screen w-screen bg-gray-900 font-sans overflow-hidden">
       <LeftSidebar
@@ -2331,6 +2446,7 @@ const App: React.FC = () => {
         onCreateGroup={createGroupFromSelection}
         images={images}
         onDownloadSelectedImages={handleDownloadSelectedImages}
+        isDirty={isDirty}
       />
       <main className="flex-1 h-full bg-gray-800 relative">
         <CanvasWrapper
@@ -2356,14 +2472,16 @@ const App: React.FC = () => {
           selectedAnnotations={selectedAnnotations}
           setSelectedAnnotations={(updater) => setAppState(prev => ({...prev, selectedAnnotations: updater(prev.selectedAnnotations), selectedImageIds: [], selectedLayerId: null }))}
           updateAnnotation={updateSelectedAnnotationsForInteraction}
+          updateMultipleAnnotationsForInteraction={updateMultipleAnnotationsForInteraction}
+          selectedAnnotationObjects={selectedAnnotationObjects}
           onColorPicked={handleColorPicked}
           canvasAnnotations={canvasAnnotations}
           addCanvasAnnotation={addCanvasAnnotation}
           lastCanvasMousePosition={lastCanvasMousePosition}
           onMoveCanvasAnnotations={(delta) => {
-            const newCanvasAnnos = canvasAnnotations.map(anno => {
-                const isSelected = selectedAnnotations.some(s => s.imageId === null && s.annotationId === anno.id);
-                if (!isSelected) return anno;
+            const selectedCanvasAnnos = new Set(selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId));
+            setCanvasAnnotationsForInteraction(prevAnnos => prevAnnos.map(anno => {
+                if (!selectedCanvasAnnos.has(anno.id)) return anno;
                 switch (anno.type) {
                     case 'rect': case 'circle': case 'text':
                         return { ...anno, x: anno.x + delta.x, y: anno.y + delta.y };
@@ -2373,12 +2491,7 @@ const App: React.FC = () => {
                         return { ...anno, start: { x: anno.start.x + delta.x, y: anno.start.y + delta.y }, end: { x: anno.end.x + delta.x, y: anno.end.y + delta.y } };
                     default: return anno;
                 }
-            });
-            setAppState(prev => {
-                const newHistory = [...prev.history];
-                newHistory[prev.historyIndex] = { ...newHistory[prev.historyIndex], canvasAnnotations: newCanvasAnnos };
-                return { ...prev, history: newHistory };
-            });
+            }));
           }}
           onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
           onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
@@ -2413,6 +2526,9 @@ const App: React.FC = () => {
           onReparentGroup={reparentGroup}
           onRenameGroupLabel={renameGroupLabel}
           onToggleGroupLabel={toggleGroupLabel}
+          onReverseLayerOrder={handleReverseLayerOrder}
+          onAddTag={handleAddTag}
+          onRemoveTag={handleRemoveTag}
         />
         <FloatingAnnotationEditor
           ref={floatingEditorRef}

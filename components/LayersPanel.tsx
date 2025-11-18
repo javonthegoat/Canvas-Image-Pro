@@ -1,6 +1,7 @@
-import React, { useRef, useState, useEffect, useMemo } from 'react';
+
+import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { CanvasImage, Annotation, Group } from '../types';
-import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon, ChevronsUpIcon, ChevronsDownIcon, EyeIcon, EyeOffIcon, PencilIcon } from './icons';
+import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon, ChevronsUpIcon, ChevronsDownIcon, EyeIcon, EyeOffIcon, PencilIcon, SearchIcon, XIcon, ChevronsUpDownIcon, TagIcon, SortDescendingIcon, SortAscendingIcon } from './icons';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
 
@@ -74,7 +75,10 @@ interface LayersPanelProps {
   onToggleImageAnnotationsExpanded: (imageId: string) => void;
   onReparentGroup: (childGroupId: string, parentGroupId: string | null) => void;
   onRenameGroupLabel: (groupId: string, newLabel: string) => void;
-  onToggleGroupLabel: (groupId: string) => void;
+  onToggleGroupLabel: (groupId: string, newLabel: string) => void;
+  onReverseLayerOrder: () => void;
+  onAddTag: (imageId: string, tag: string) => void;
+  onRemoveTag: (imageId: string, tagIndex: number) => void;
 }
 
 const AnnotationIcon: React.FC<{ type: Annotation['type'] }> = ({ type }) => {
@@ -140,11 +144,14 @@ const CanvasImageItem: React.FC<{
     isExpanded: boolean;
     onToggleExpanded: (id: string) => void;
     depth?: number;
-}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentCanvasAnnotationsToImage, onReparentImageAnnotationsToCanvas, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped, isExpanded, onToggleExpanded, depth = 0 }) => {
+    onAddTag: (imageId: string, tag: string) => void;
+    onRemoveTag: (imageId: string, tagIndex: number) => void;
+}> = ({ image, isSelected, onSelect, onCenter, onRename, onDelete, onReparentCanvasAnnotationsToImage, onReparentImageAnnotationsToCanvas, selectedAnnotations, onSelectAnnotation, isParentOfSelectedAnnotation, isGrouped, isExpanded, onToggleExpanded, depth = 0, onAddTag, onRemoveTag }) => {
     const [isRenaming, setIsRenaming] = useState(false);
     const [name, setName] = useState(image.name);
     const [isDragOver, setIsDragOver] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
+    const [tagInput, setTagInput] = useState('');
 
     const ringClasses = useMemo(() => {
         if (isDragOver) {
@@ -176,6 +183,14 @@ const CanvasImageItem: React.FC<{
             setName(image.name); // revert if empty
         }
         setIsRenaming(false);
+    };
+
+    const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter' && tagInput.trim()) {
+            e.preventDefault();
+            onAddTag(image.id, tagInput.trim());
+            setTagInput('');
+        }
     };
 
     const handleDragEnter = (e: React.DragEvent) => {
@@ -285,11 +300,9 @@ const CanvasImageItem: React.FC<{
                     </div>
                 </div>
                 <div className="flex items-center">
-                    {image.annotations.length > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); onToggleExpanded(image.id); }} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-md transition-colors flex-shrink-0" title={isExpanded ? 'Collapse' : 'Expand'}>
-                            {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-                        </button>
-                    )}
+                    <button onClick={(e) => { e.stopPropagation(); onToggleExpanded(image.id); }} className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-md transition-colors flex-shrink-0" title={isExpanded ? 'Collapse' : 'Expand'}>
+                        {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
+                    </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); onDelete(image.id); }}
                         className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-gray-700 rounded-md transition-colors flex-shrink-0"
@@ -299,25 +312,52 @@ const CanvasImageItem: React.FC<{
                     </button>
                 </div>
             </div>
-            {isExpanded && image.annotations.length > 0 && (
-                <div className="p-1 pb-2 space-y-1 rounded-b-md">
-                    {/* FIX: Use localeCompare for robust string sorting of annotations. */}
-                    {[...image.annotations].sort((a, b) => String(a.id).localeCompare(String(b.id))).map(anno => (
-                        <AnnotationListItem
-                            key={anno.id}
-                            annotation={anno}
-                            imageId={image.id}
-                            isSelected={selectedAnnotations.some(sel => sel.annotationId === anno.id)}
-                            onSelect={(imageId, annotationId, e) => onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey })}
+             {isExpanded && (
+                <div className="p-2 space-y-2 rounded-b-md bg-gray-800">
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-400 flex items-center">
+                            <TagIcon className="w-3 h-3 mr-1" /> Tags
+                        </label>
+                        <div className="flex flex-wrap gap-1">
+                            {image.tags?.map((tag, index) => (
+                                <span key={index} className="bg-teal-800 text-teal-200 text-xs font-medium px-2 py-0.5 rounded-full flex items-center">
+                                    {tag}
+                                    <button onClick={(e) => { e.stopPropagation(); onRemoveTag(image.id, index); }} className="ml-1 text-teal-400 hover:text-white">
+                                        <XIcon className="w-3 h-3" />
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                        <input
+                            type="text"
+                            placeholder="Add tag & press Enter"
+                            value={tagInput}
+                            onClick={e => e.stopPropagation()}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={handleAddTag}
+                            className="w-full bg-gray-900 text-xs p-1 rounded-sm border border-gray-600 focus:ring-blue-500 focus:border-blue-500 mt-1"
                         />
-                    ))}
+                    </div>
+                    {image.annotations.length > 0 && (
+                        <div className="pt-2 border-t border-gray-700/50 space-y-1">
+                            {[...image.annotations].sort((a, b) => a.id.localeCompare(b.id)).map(anno => (
+                                <AnnotationListItem
+                                    key={anno.id}
+                                    annotation={anno}
+                                    imageId={image.id}
+                                    isSelected={selectedAnnotations.some(sel => sel.annotationId === anno.id)}
+                                    onSelect={(imageId, annotationId, e) => onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey })}
+                                />
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
     );
 };
 
-const GroupListItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder' | 'canvasAnnotations' | 'onReorderTopLevelLayer'> & {
+const GroupListItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder' | 'canvasAnnotations' | 'onReorderTopLevelLayer' | 'onReverseLayerOrder'> & {
     group: Group;
     depth?: number;
 }> = (props) => {
@@ -438,7 +478,7 @@ const GroupListItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder' | 'canva
                             <p className="truncate flex-1" title={group.label}>{group.label}</p>
                         )}
                         <button onClick={(e) => {e.stopPropagation(); setIsRenamingLabel(true)}} className="p-1 text-gray-400 hover:text-white"><PencilIcon className="w-3 h-3"/></button>
-                        <button onClick={(e) => {e.stopPropagation(); onToggleGroupLabel(group.id)}} className="p-1 text-gray-400 hover:text-white" title={group.showLabel ? 'Hide Label' : 'Show Label'}>
+                        <button onClick={(e) => {e.stopPropagation(); onToggleGroupLabel(group.id);}} className="p-1 text-gray-400 hover:text-white" title={group.showLabel ? 'Hide Label' : 'Show Label'}>
                             {group.showLabel ? <EyeIcon className="w-4 h-4"/> : <EyeOffIcon className="w-4 h-4"/>}
                         </button>
                     </div>
@@ -464,6 +504,8 @@ const GroupListItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder' | 'canva
                                 isGrouped
                                 isExpanded={props.expandedImageAnnotationIds.includes(child.id)}
                                 onToggleExpanded={props.onToggleImageAnnotationsExpanded}
+                                onAddTag={props.onAddTag}
+                                onRemoveTag={props.onRemoveTag}
                             />
                         )
                     })}
@@ -479,12 +521,97 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
       selectedAnnotations, onSelectAnnotation, groups,
       onDeleteGroup, onRenameGroup, onToggleGroupExpanded, onAddImageToGroup, onUngroupImages,
       canvasAnnotations, onReparentCanvasAnnotationsToImage, selectedImageIds, onReorderLayer,
-      selectedLayerId, onReparentImageAnnotationsToCanvas, parentImageIds, expandedImageAnnotationIds, onToggleImageAnnotationsExpanded, onReparentGroup
+      selectedLayerId, onReparentImageAnnotationsToCanvas, parentImageIds, expandedImageAnnotationIds, onToggleImageAnnotationsExpanded, onReparentGroup,
+      onReverseLayerOrder, onAddTag, onRemoveTag,
     } = props;
 
     const [isMainDragOver, setIsMainDragOver] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [tagFilter, setTagFilter] = useState('');
+    const [dateSort, setDateSort] = useState<'newest' | 'oldest'>('newest');
+    const [tagInputFocused, setTagInputFocused] = useState(false);
 
-    const displayedLayers = visualLayerOrder;
+    const imageMap = useMemo(() => new Map(images.map(i => [i.id, i])), [images]);
+
+    const allTags = useMemo(() => {
+        const tagSet = new Set<string>();
+        images.forEach(image => {
+            image.tags?.forEach(tag => tagSet.add(tag));
+        });
+        return Array.from(tagSet).sort();
+    }, [images]);
+
+    const filteredTags = useMemo(() => {
+        if (!tagFilter) return allTags;
+        return allTags.filter(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()));
+    }, [allTags, tagFilter]);
+
+    const getGroupDate = useCallback((group: Group): Date | null => {
+        const imageIds = getAllImageIdsInGroup(group.id, groups);
+        if (imageIds.length === 0) return null;
+        
+        const dates = imageIds
+            .map(id => imageMap.get(id)?.createdAt)
+            .filter((d): d is Date => !!d);
+
+        if (dates.length === 0) return null;
+
+        // Use the newest date for the group
+        return new Date(Math.max(...dates.map(d => new Date(d).getTime())));
+    }, [groups, imageMap]);
+
+    const displayLayers = useMemo(() => {
+        // 1. Sort
+        let sortedLayers = [...visualLayerOrder];
+        if (dateSort !== 'newest') { // 'newest' is the default visual order
+             sortedLayers.sort((a, b) => {
+                const dateA = 'element' in a ? new Date(a.createdAt) : getGroupDate(a);
+                const dateB = 'element' in b ? new Date(b.createdAt) : getGroupDate(b);
+                if (!dateA || !dateB) return 0;
+                
+                const timeA = dateA.getTime();
+                const timeB = dateB.getTime();
+
+                return dateSort === 'oldest' ? timeA - timeB : timeB - timeA;
+            });
+        }
+       
+        // 2. Filter
+        const lowerCaseNameSearch = searchTerm.trim().toLowerCase();
+        const lowerCaseTagFilter = tagFilter.trim().toLowerCase();
+
+        if (!lowerCaseNameSearch && !lowerCaseTagFilter) {
+            return sortedLayers;
+        }
+        
+        const filterRecursive = (items: (Group | CanvasImage)[]): (Group | CanvasImage)[] => {
+            const result: (Group | CanvasImage)[] = [];
+            for (const item of items) {
+                if ('groupIds' in item) { // Is Group
+                    const children = getOrderedChildrenOfGroup(item, images, groups);
+                    const filteredChildren = filterRecursive(children);
+                    
+                    const groupNameMatches = !lowerCaseNameSearch || item.name.toLowerCase().includes(lowerCaseNameSearch);
+
+                    if (filteredChildren.length > 0) {
+                        result.push(item);
+                    } else if (groupNameMatches && !lowerCaseTagFilter) {
+                        result.push(item);
+                    }
+                } else { // Is CanvasImage
+                    const imageNameMatches = !lowerCaseNameSearch || item.name.toLowerCase().includes(lowerCaseNameSearch);
+                    const imageTagMatches = !lowerCaseTagFilter || (item.tags?.some(tag => tag.toLowerCase().includes(lowerCaseTagFilter)) ?? false);
+
+                    if (imageNameMatches && imageTagMatches) {
+                        result.push(item);
+                    }
+                }
+            }
+            return result;
+        };
+
+        return filterRecursive(sortedLayers);
+    }, [searchTerm, tagFilter, dateSort, visualLayerOrder, images, groups, getGroupDate]);
 
     const { isFirst, isLast } = useMemo(() => {
         if (!selectedLayerId) return { isFirst: true, isLast: true };
@@ -497,7 +624,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
 
         const items = parentGroup
             ? getOrderedChildrenOfGroup(parentGroup, images, groups)
-            : displayedLayers;
+            : visualLayerOrder;
         
         const currentIndex = items.findIndex(l => l.id === selectedLayerId);
         
@@ -507,7 +634,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
             isFirst: currentIndex === 0,
             isLast: currentIndex === items.length - 1
         };
-    }, [selectedLayerId, displayedLayers, groups, images]);
+    }, [selectedLayerId, visualLayerOrder, groups, images]);
 
     const handleAnnotationSelect = (imageId: string | null, annotationId: string, e: React.MouseEvent) => {
         onSelectAnnotation(imageId, annotationId, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey });
@@ -556,6 +683,82 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                     <LayersIcon className="w-5 h-5 mr-2 text-gray-400" />
                     <h2 className="text-sm font-bold text-white">Layers</h2>
                 </div>
+                <div className="flex items-center">
+                    <button onClick={onReverseLayerOrder} title="Reverse Layer Order" className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-md transition-colors">
+                        <ChevronsUpDownIcon />
+                    </button>
+                </div>
+            </div>
+
+            <div className="p-2 border-b border-gray-700 space-y-2 relative z-10">
+                <div className="relative">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2">
+                        <SearchIcon className="w-4 h-4 text-gray-500" />
+                    </span>
+                    <input
+                        type="text"
+                        placeholder="Search by name..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full bg-gray-800 text-sm text-gray-200 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 pl-8 pr-8 py-1"
+                    />
+                    {searchTerm && (
+                        <button onClick={() => setSearchTerm('')} className="absolute inset-y-0 right-0 flex items-center pr-2 text-gray-500 hover:text-white">
+                            <XIcon className="w-4 h-4" />
+                        </button>
+                    )}
+                </div>
+                 <div className="relative">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2">
+                        <TagIcon className="w-4 h-4 text-gray-500" />
+                    </span>
+                    <input
+                        type="text"
+                        placeholder="Filter by tag..."
+                        value={tagFilter}
+                        onFocus={() => setTagInputFocused(true)}
+                        onBlur={() => setTagInputFocused(false)}
+                        onChange={(e) => setTagFilter(e.target.value)}
+                        className="w-full bg-gray-800 text-sm text-gray-200 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 pl-8 pr-8 py-1"
+                    />
+                    {tagFilter && (
+                        <button onClick={() => setTagFilter('')} className="absolute inset-y-0 right-0 flex items-center pr-2 text-gray-500 hover:text-white">
+                            <XIcon className="w-4 h-4" />
+                        </button>
+                    )}
+                    
+                    {tagInputFocused && (allTags.length > 0 || tagFilter) && (
+                        <div className="absolute left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-600 rounded-md shadow-xl max-h-40 overflow-y-auto z-50">
+                             {filteredTags.length > 0 ? (
+                                filteredTags.map(tag => (
+                                    <button
+                                        key={tag}
+                                        className="block w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-blue-600 hover:text-white transition-colors border-b border-gray-700 last:border-0"
+                                        onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            setTagFilter(tag);
+                                            setTagInputFocused(false);
+                                        }}
+                                    >
+                                        {tag}
+                                    </button>
+                                ))
+                             ) : (
+                                 <div className="px-3 py-2 text-xs text-gray-500 italic">No matching tags</div>
+                             )}
+                        </div>
+                    )}
+                </div>
+                <div className="flex items-center justify-end text-xs">
+                    <button 
+                      onClick={() => setDateSort(d => d === 'newest' ? 'oldest' : 'newest')} 
+                      className="flex items-center space-x-1 p-1 rounded-md text-gray-400 hover:bg-gray-700 hover:text-white"
+                      title={dateSort === 'newest' ? "Sort: Newest to Oldest" : "Sort: Oldest to Newest"}
+                    >
+                      {dateSort === 'newest' ? <SortDescendingIcon className="w-4 h-4" /> : <SortAscendingIcon className="w-4 h-4" />}
+                      <span>Sort by Date</span>
+                    </button>
+                </div>
             </div>
 
             <div 
@@ -570,11 +773,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                 onDragLeave={() => setIsMainDragOver(false)}
                 onDrop={handleMainDrop}
             >
-                {displayedLayers.length === 0 && canvasAnnotations.length === 0 ? (
-                    <p className="text-xs text-gray-500 text-center py-4">Canvas is empty.</p>
+                {displayLayers.length === 0 && canvasAnnotations.length === 0 ? (
+                    <p className="text-xs text-gray-500 text-center py-4">{searchTerm || tagFilter ? 'No matching layers found.' : 'Canvas is empty.'}</p>
                 ) : (
                     <>
-                        {displayedLayers.map((layer) => {
+                        {displayLayers.map((layer) => {
                             const isGroup = 'groupIds' in layer;
                             const id = layer.id;
 
@@ -608,6 +811,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                                             parentImageIds={parentImageIds}
                                             expandedImageAnnotationIds={expandedImageAnnotationIds}
                                             onToggleImageAnnotationsExpanded={onToggleImageAnnotationsExpanded}
+                                            onAddTag={onAddTag}
+                                            onRemoveTag={onRemoveTag}
                                         />
                                     ) : (
                                         <CanvasImageItem
@@ -624,14 +829,15 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
                                             isParentOfSelectedAnnotation={parentImageIds.has(layer.id)}
                                             isExpanded={expandedImageAnnotationIds.includes(layer.id)}
                                             onToggleExpanded={onToggleImageAnnotationsExpanded}
+                                            onAddTag={onAddTag}
+                                            onRemoveTag={onRemoveTag}
                                         />
                                     )}
                                 </div>
                             );
                         })}
                         
-                        {/* FIX: Use localeCompare for robust string sorting of annotations. */}
-                        {[...canvasAnnotations].sort((a,b) => String(a.id).localeCompare(String(b.id))).map(anno => (
+                        {[...canvasAnnotations].sort((a,b) => a.id.localeCompare(b.id)).map(anno => (
                             <AnnotationListItem
                                 key={anno.id}
                                 annotation={anno}

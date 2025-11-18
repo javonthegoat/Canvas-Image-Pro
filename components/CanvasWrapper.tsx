@@ -1,8 +1,9 @@
 
+
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
-import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, transformLocalToGlobal } from '../utils/canvasUtils';
+import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal } from '../utils/canvasUtils';
 import { rgbToHex } from '../utils/colorUtils';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
@@ -28,6 +29,8 @@ interface CanvasWrapperProps {
   selectedAnnotations: AnnotationSelection[];
   setSelectedAnnotations: (updater: (prev: AnnotationSelection[]) => AnnotationSelection[]) => void;
   updateAnnotation: (changes: Partial<Annotation>) => void;
+  updateMultipleAnnotationsForInteraction: (updates: Array<{ selection: AnnotationSelection; changes: Partial<Annotation> }>) => void;
+  selectedAnnotationObjects: Annotation[];
   onColorPicked: (color: string) => void;
   canvasAnnotations: Annotation[];
   addCanvasAnnotation: (annotation: Annotation) => void;
@@ -40,7 +43,7 @@ interface CanvasWrapperProps {
 }
 
 type CropHandle = 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
-type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end';
+type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end' | 'scale-multi-annotation' | 'rotate-multi-annotation';
 
 type InteractionState =
   | { mode: 'pan'; startPoint: Point }
@@ -54,7 +57,9 @@ type InteractionState =
   | { mode: 'scale-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startScale: number; startDist: number; }
   | { mode: 'rotate-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startRotation: number; startAngle: number; }
   | { mode: 'resize-arrow-start'; startPoint: Point; annotationId: string; imageId: string | null; }
-  | { mode: 'resize-arrow-end'; startPoint: Point; annotationId: string; imageId: string | null; };
+  | { mode: 'resize-arrow-end'; startPoint: Point; annotationId: string; imageId: string | null; }
+  | { mode: 'scale-multi-annotation'; startPoint: Point; center: Point; initialAnnotations: Annotation[]; initialSelections: AnnotationSelection[]; startDist: number; }
+  | { mode: 'rotate-multi-annotation'; startPoint: Point; center: Point; initialAnnotations: Annotation[]; initialSelections: AnnotationSelection[]; startAngle: number; };
 
 const getCropHandles = (cropArea: Rect, scale: number): { name: CropHandle; rect: Rect; cursor: string }[] => {
     const handleSize = 10 / scale;
@@ -108,6 +113,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   deleteSelectedAnnotations,
   lastCanvasMousePosition,
   onReparentImageAnnotationsToCanvas,
+  updateMultipleAnnotationsForInteraction,
+  selectedAnnotationObjects,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -376,50 +383,91 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         return;
     }
     
-    if (activeTool === 'select' && selectedAnnotations.length === 1) {
-        const selection = selectedAnnotations[0];
-        const image = selection.imageId ? images.find(img => img.id === selection.imageId) : null;
-        const annotation = image 
-            ? image.annotations.find(anno => anno.id === selection.annotationId)
-            : canvasAnnotations.find(anno => anno.id === selection.annotationId);
-        
-        if (annotation) {
-            const localPointForAnnotation = getAnnotationLocalPoint(canvasPoint, annotation, image, ctx);
-            
-            const baseScale = image ? image.scale : 1;
-            const handleSize = 8 / (viewTransform.scale * baseScale);
-            const clickRadius = handleSize / (annotation.type === 'arrow' || annotation.type === 'line' ? 1 : annotation.scale) * 1.5;
-    
-            if (annotation.type === 'arrow' || annotation.type === 'line') {
-                if (Math.hypot(localPointForAnnotation.x - annotation.start.x, localPointForAnnotation.y - annotation.start.y) < clickRadius) {
-                     setInteraction({ mode: 'resize-arrow-start', startPoint: canvasPoint, annotationId: annotation.id, imageId: image?.id ?? null });
-                     return;
-                }
-                if (Math.hypot(localPointForAnnotation.x - annotation.end.x, localPointForAnnotation.y - annotation.end.y) < clickRadius) {
-                     setInteraction({ mode: 'resize-arrow-end', startPoint: canvasPoint, annotationId: annotation.id, imageId: image?.id ?? null });
-                     return;
-                }
-            } else {
-                const bounds = getAnnotationPrimitiveBounds(annotation, ctx);
-                const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-                const rotationHandleOffset = 20 / (viewTransform.scale * baseScale * annotation.scale);
-                const scaleHandlePos = { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
-                const rotationHandlePos = { x: center.x, y: bounds.y - rotationHandleOffset };
-    
-                if (Math.hypot(localPointForAnnotation.x - scaleHandlePos.x, localPointForAnnotation.y - scaleHandlePos.y) < clickRadius) {
-                    const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
-                    const startDist = Math.hypot(parentSpaceClickPoint.x - center.x, parentSpaceClickPoint.y - center.y);
-                    setInteraction({ mode: 'scale-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startScale: annotation.scale, startDist: startDist });
-                    return;
-                }
-                if (Math.hypot(localPointForAnnotation.x - rotationHandlePos.x, localPointForAnnotation.y - rotationHandlePos.y) < clickRadius) {
-                    const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
-                    const startAngle = Math.atan2(parentSpaceClickPoint.y - center.y, parentSpaceClickPoint.x - center.x);
-                    setInteraction({ mode: 'rotate-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startRotation: annotation.rotation, startAngle: startAngle });
-                    return;
-                }
-            }
-        }
+    if (activeTool === 'select') {
+      if (selectedAnnotations.length > 1) {
+          const multiBounds = getMultiAnnotationBounds(selectedAnnotations, images, canvasAnnotations, ctx);
+          if (multiBounds) {
+              const center = { x: multiBounds.x + multiBounds.width / 2, y: multiBounds.y + multiBounds.height / 2 };
+              const handleSize = 8 / viewTransform.scale;
+              const clickRadius = handleSize * 1.5;
+
+              // Check rotation handle
+              const rotationHandleOffset = 20 / viewTransform.scale;
+              const rotationHandlePos = { x: multiBounds.x + multiBounds.width / 2, y: multiBounds.y - rotationHandleOffset };
+              if (Math.hypot(canvasPoint.x - rotationHandlePos.x, canvasPoint.y - rotationHandlePos.y) < clickRadius) {
+                  const startAngle = Math.atan2(canvasPoint.y - center.y, canvasPoint.x - center.x);
+                  setInteraction({ 
+                      mode: 'rotate-multi-annotation', 
+                      startPoint: canvasPoint, 
+                      center,
+                      initialAnnotations: JSON.parse(JSON.stringify(selectedAnnotationObjects)),
+                      initialSelections: selectedAnnotations,
+                      startAngle
+                  });
+                  return;
+              }
+
+              // Check scale handle
+              const scaleHandlePos = { x: multiBounds.x + multiBounds.width, y: multiBounds.y + multiBounds.height };
+              if (Math.hypot(canvasPoint.x - scaleHandlePos.x, canvasPoint.y - scaleHandlePos.y) < clickRadius) {
+                  const startDist = Math.hypot(canvasPoint.x - center.x, canvasPoint.y - center.y);
+                  setInteraction({
+                      mode: 'scale-multi-annotation',
+                      startPoint: canvasPoint,
+                      center,
+                      initialAnnotations: JSON.parse(JSON.stringify(selectedAnnotationObjects)),
+                      initialSelections: selectedAnnotations,
+                      startDist
+                  });
+                  return;
+              }
+          }
+      }
+      if (selectedAnnotations.length === 1) {
+          const selection = selectedAnnotations[0];
+          const image = selection.imageId ? images.find(img => img.id === selection.imageId) : null;
+          const annotation = image 
+              ? image.annotations.find(anno => anno.id === selection.annotationId)
+              : canvasAnnotations.find(anno => anno.id === selection.annotationId);
+          
+          if (annotation) {
+              const localPointForAnnotation = getAnnotationLocalPoint(canvasPoint, annotation, image, ctx);
+              
+              const baseScale = image ? image.scale : 1;
+              const handleSize = 8 / (viewTransform.scale * baseScale);
+              const clickRadius = handleSize / (annotation.type === 'arrow' || annotation.type === 'line' ? 1 : annotation.scale) * 1.5;
+      
+              if (annotation.type === 'arrow' || annotation.type === 'line') {
+                  if (Math.hypot(localPointForAnnotation.x - annotation.start.x, localPointForAnnotation.y - annotation.start.y) < clickRadius) {
+                       setInteraction({ mode: 'resize-arrow-start', startPoint: canvasPoint, annotationId: annotation.id, imageId: image?.id ?? null });
+                       return;
+                  }
+                  if (Math.hypot(localPointForAnnotation.x - annotation.end.x, localPointForAnnotation.y - annotation.end.y) < clickRadius) {
+                       setInteraction({ mode: 'resize-arrow-end', startPoint: canvasPoint, annotationId: annotation.id, imageId: image?.id ?? null });
+                       return;
+                  }
+              } else {
+                  const bounds = getAnnotationPrimitiveBounds(annotation, ctx);
+                  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+                  const rotationHandleOffset = 20 / (viewTransform.scale * baseScale * annotation.scale);
+                  const scaleHandlePos = { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
+                  const rotationHandlePos = { x: center.x, y: bounds.y - rotationHandleOffset };
+      
+                  if (Math.hypot(localPointForAnnotation.x - scaleHandlePos.x, localPointForAnnotation.y - scaleHandlePos.y) < clickRadius) {
+                      const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
+                      const startDist = Math.hypot(parentSpaceClickPoint.x - center.x, parentSpaceClickPoint.y - center.y);
+                      setInteraction({ mode: 'scale-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startScale: annotation.scale, startDist: startDist });
+                      return;
+                  }
+                  if (Math.hypot(localPointForAnnotation.x - rotationHandlePos.x, localPointForAnnotation.y - rotationHandlePos.y) < clickRadius) {
+                      const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
+                      const startAngle = Math.atan2(parentSpaceClickPoint.y - center.y, parentSpaceClickPoint.x - center.x);
+                      setInteraction({ mode: 'rotate-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startRotation: annotation.rotation, startAngle: startAngle });
+                      return;
+                  }
+              }
+          }
+      }
     }
 
     if (activeTool === 'text') {
@@ -552,7 +600,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         setMarqueeRect({ x: canvasPoint.x, y: canvasPoint.y, width: 0, height: 0 });
       }
     }
-  }, [getCanvasPoint, images, setSelectedImageId, cropArea, viewTransform.scale, activeTool, toolOptions, getLocalPoint, getUnboundedLocalPoint, addAnnotation, isCropKeyPressed, setCropArea, findAnnotationAtPoint, setSelectedAnnotations, isSpacebarPressed, onSelectImages, selectedImageIds, setActiveTool, onColorPicked, addCanvasAnnotation, selectedAnnotations, getAnnotationLocalPoint, canvasAnnotations]);
+  }, [getCanvasPoint, images, setSelectedImageId, cropArea, viewTransform.scale, activeTool, toolOptions, getLocalPoint, getUnboundedLocalPoint, addAnnotation, isCropKeyPressed, setCropArea, findAnnotationAtPoint, setSelectedAnnotations, isSpacebarPressed, onSelectImages, selectedImageIds, setActiveTool, onColorPicked, addCanvasAnnotation, selectedAnnotations, getAnnotationLocalPoint, canvasAnnotations, selectedAnnotationObjects]);
 
   const handleInteractionMove = useCallback((e: MouseEvent) => {
     if (!interaction) return;
@@ -708,6 +756,28 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         const angleDelta = currentAngle - startAngle;
         const newRotation = startRotation + (angleDelta * 180 / Math.PI);
         updateAnnotation({ rotation: newRotation });
+    } else if (interaction.mode === 'scale-multi-annotation') {
+        const { center, startDist, initialAnnotations, initialSelections } = interaction;
+        const currentDist = Math.hypot(canvasPoint.x - center.x, canvasPoint.y - center.y);
+        const scaleFactor = startDist > 0.01 ? currentDist / startDist : 1;
+
+        const updates = initialAnnotations.map((initialAnno, index) => {
+            const selection = initialSelections[index];
+            const changes: Partial<Annotation> = { scale: initialAnno.scale * scaleFactor };
+            return { selection, changes };
+        });
+        updateMultipleAnnotationsForInteraction(updates);
+    } else if (interaction.mode === 'rotate-multi-annotation') {
+        const { center, startAngle, initialAnnotations, initialSelections } = interaction;
+        const currentAngle = Math.atan2(canvasPoint.y - center.y, canvasPoint.x - center.x);
+        const angleDelta = currentAngle - startAngle;
+
+        const updates = initialAnnotations.map((initialAnno, index) => {
+            const selection = initialSelections[index];
+            const changes: Partial<Annotation> = { rotation: initialAnno.rotation + (angleDelta * 180 / Math.PI) };
+            return { selection, changes };
+        });
+        updateMultipleAnnotationsForInteraction(updates);
     } else if (interaction.mode === 'pan') {
       const dx = currentPoint.x - lastMousePosition.current.x;
       const dy = currentPoint.y - lastMousePosition.current.y;
@@ -774,7 +844,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     }
     
     lastMousePosition.current = currentPoint;
-  }, [interaction, getCanvasPoint, setImages, viewTransform.scale, images, setCropArea, aspectRatio, drawingAnnotation, getUnboundedLocalPoint, setViewTransform, selectedAnnotations, updateAnnotation, selectedImageIds, setDrawingAnnotation, setMarqueeRect, onMoveCanvasAnnotations, getLocalPoint, getAnnotationLocalPoint, canvasAnnotations, onMoveSelectedImages]);
+  }, [interaction, getCanvasPoint, setImages, viewTransform.scale, images, setCropArea, aspectRatio, drawingAnnotation, getUnboundedLocalPoint, setViewTransform, selectedAnnotations, updateAnnotation, selectedImageIds, setDrawingAnnotation, setMarqueeRect, onMoveCanvasAnnotations, getLocalPoint, getAnnotationLocalPoint, canvasAnnotations, onMoveSelectedImages, updateMultipleAnnotationsForInteraction]);
 
   const handleInteractionEnd = useCallback((e: MouseEvent) => {
     const canvas = internalCanvasRef.current;
@@ -869,7 +939,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       setCropArea(normalizedCrop);
     }
     
-    if (interaction && ['move', 'move-annotation', 'resize-arrow-start', 'resize-arrow-end', 'scale-annotation', 'rotate-annotation'].includes(interaction.mode)) {
+    if (interaction && ['move', 'move-annotation', 'resize-arrow-start', 'resize-arrow-end', 'scale-annotation', 'rotate-annotation', 'scale-multi-annotation', 'rotate-multi-annotation'].includes(interaction.mode)) {
         if (!interactionCommitted) {
           onInteractionEnd();
         }
