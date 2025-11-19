@@ -215,13 +215,41 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    if (annotation.type === 'arrow' || annotation.type === 'line') {
-        const center = { x: (annotation.start.x + annotation.end.x)/2, y: (annotation.start.y + annotation.end.y)/2 };
-        ctx.translate(center.x, center.y);
-        ctx.rotate(annotation.rotation * Math.PI / 180);
-        ctx.scale(annotation.scale, annotation.scale);
-        ctx.translate(-center.x, -center.y);
+    let cx = 0, cy = 0;
+    
+    if (annotation.type === 'rect') { 
+        cx = annotation.x + annotation.width/2; 
+        cy = annotation.y + annotation.height/2; 
+    } else if (annotation.type === 'circle') { 
+        cx = annotation.x; 
+        cy = annotation.y; 
+    } else if (annotation.type === 'text') { 
+        // Measure text to find center
+        ctx.save();
+        ctx.font = `${annotation.fontSize}px ${annotation.fontFamily}`;
+        const lines = annotation.text.split('\n');
+        const widths = lines.map(line => ctx.measureText(line).width);
+        const maxWidth = Math.max(0, ...widths);
+        const lineHeight = annotation.fontSize * 1.2;
+        const height = lineHeight * lines.length;
+        ctx.restore();
+        cx = annotation.x + maxWidth / 2; 
+        cy = annotation.y + height / 2; 
+    } else if (annotation.type === 'freehand') {
+         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+         annotation.points.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+         cx = minX + (maxX-minX)/2; cy = minY + (maxY-minY)/2;
+    } else if (annotation.type === 'arrow' || annotation.type === 'line') {
+         cx = (annotation.start.x + annotation.end.x) / 2;
+         cy = (annotation.start.y + annotation.end.y) / 2;
+    }
 
+    ctx.translate(cx, cy);
+    ctx.rotate(annotation.rotation * Math.PI / 180);
+    ctx.scale(annotation.scale, annotation.scale);
+    ctx.translate(-cx, -cy);
+
+    if (annotation.type === 'arrow' || annotation.type === 'line') {
         ctx.beginPath();
         ctx.moveTo(annotation.start.x, annotation.start.y);
         ctx.lineTo(annotation.end.x, annotation.end.y);
@@ -229,7 +257,7 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
 
         if (annotation.type === 'arrow') {
              const angle = Math.atan2(annotation.end.y - annotation.start.y, annotation.end.x - annotation.start.x);
-             const headLen = 10 * annotation.scale + annotation.strokeWidth;
+             const headLen = 10 + annotation.strokeWidth;
              ctx.beginPath();
              ctx.moveTo(annotation.end.x, annotation.end.y);
              ctx.lineTo(annotation.end.x - headLen * Math.cos(angle - Math.PI / 6), annotation.end.y - headLen * Math.sin(angle - Math.PI / 6));
@@ -238,21 +266,6 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
              ctx.stroke();
         }
     } else {
-        let cx = 0, cy = 0;
-        if (annotation.type === 'rect') { cx = annotation.x + annotation.width/2; cy = annotation.y + annotation.height/2; }
-        else if (annotation.type === 'circle') { cx = annotation.x; cy = annotation.y; }
-        else if (annotation.type === 'text') { cx = annotation.x; cy = annotation.y; } 
-        else if (annotation.type === 'freehand') {
-             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-             annotation.points.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
-             cx = minX + (maxX-minX)/2; cy = minY + (maxY-minY)/2;
-        }
-
-        ctx.translate(cx, cy);
-        ctx.rotate(annotation.rotation * Math.PI / 180);
-        ctx.scale(annotation.scale, annotation.scale);
-        ctx.translate(-cx, -cy);
-
         if (annotation.type === 'freehand') {
              ctx.strokeStyle = annotation.color;
              ctx.lineWidth = annotation.strokeWidth;
@@ -322,7 +335,7 @@ export const getMultiAnnotationBounds = (selections: { imageId: string | null; a
         if (annotation) {
             const localBounds = getAnnotationPrimitiveBounds(annotation, ctx);
             
-            // Corners in local space
+            // Corners in local space (untransformed primitive space)
             const corners = [
                 { x: localBounds.x, y: localBounds.y },
                 { x: localBounds.x + localBounds.width, y: localBounds.y },
@@ -332,32 +345,23 @@ export const getMultiAnnotationBounds = (selections: { imageId: string | null; a
 
             corners.forEach(corner => {
                  let globalPoint = corner;
+
+                 // Apply Annotation Transform
+                 const center = { x: localBounds.x + localBounds.width/2, y: localBounds.y + localBounds.height/2 };
+                 let p = { x: corner.x - center.x, y: corner.y - center.y };
+                 const rad = annotation.rotation * Math.PI / 180;
+                 const cos = Math.cos(rad);
+                 const sin = Math.sin(rad);
+                 p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
+                 p = { x: p.x * annotation.scale, y: p.y * annotation.scale };
+                 const p_local_image = { x: p.x + center.x, y: p.y + center.y };
+
                  if (image) {
-                     // First local rotation/scale of annotation (if any, usually handled in primitive bounds for simple shapes, but if rotated...)
-                     // getAnnotationPrimitiveBounds returns UNROTATED bounds relative to parent.
-                     // We need to apply annotation rotation/scale, THEN image rotation/scale.
-                     
-                     // Apply annotation transform
-                     const center = { x: localBounds.x + localBounds.width/2, y: localBounds.y + localBounds.height/2 };
-                     let p = { x: corner.x - center.x, y: corner.y - center.y };
-                     const rad = annotation.rotation * Math.PI / 180;
-                     const cos = Math.cos(rad);
-                     const sin = Math.sin(rad);
-                     p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-                     p = { x: p.x * annotation.scale, y: p.y * annotation.scale };
-                     const p_local_image = { x: p.x + center.x, y: p.y + center.y };
-                     
+                     // Apply Image Transform
                      globalPoint = transformLocalToGlobal(p_local_image, image);
                  } else {
-                     // Canvas annotation
-                     const center = { x: localBounds.x + localBounds.width/2, y: localBounds.y + localBounds.height/2 };
-                     let p = { x: corner.x - center.x, y: corner.y - center.y };
-                     const rad = annotation.rotation * Math.PI / 180;
-                     const cos = Math.cos(rad);
-                     const sin = Math.sin(rad);
-                     p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-                     p = { x: p.x * annotation.scale, y: p.y * annotation.scale };
-                     globalPoint = { x: p.x + center.x, y: p.y + center.y };
+                     // Canvas annotation (already global)
+                     globalPoint = p_local_image;
                  }
                  
                  minX = Math.min(minX, globalPoint.x);
@@ -436,46 +440,55 @@ export const drawCanvas = (
         image.annotations.forEach(anno => {
             drawAnnotation(ctx, anno);
             if (selectedAnnotations.some(s => s.annotationId === anno.id && s.imageId === image.id)) {
-                // Draw selection box and handles
-                 const bounds = getAnnotationPrimitiveBounds(anno, ctx); 
-                 
-                 ctx.save();
+                 const bounds = getAnnotationPrimitiveBounds(anno, ctx);
                  let cx = 0, cy = 0;
                  if (anno.type === 'rect') { cx = anno.x + anno.width/2; cy = anno.y + anno.height/2; }
                  else if (anno.type === 'circle') { cx = anno.x; cy = anno.y; }
-                 else if (anno.type === 'text') { cx = anno.x; cy = anno.y; }
+                 else if (anno.type === 'text') { cx = bounds.x + bounds.width/2; cy = bounds.y + bounds.height/2; }
                  else if (anno.type === 'freehand') {
                       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
                       anno.points.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
                       cx = minX + (maxX-minX)/2; cy = minY + (maxY-minY)/2;
-                 }
-                 
-                 if (anno.type !== 'line' && anno.type !== 'arrow') {
-                     ctx.translate(cx, cy);
-                     ctx.rotate(anno.rotation * Math.PI / 180);
-                     ctx.scale(anno.scale, anno.scale);
-                     ctx.translate(-cx, -cy);
+                 } else if (anno.type === 'arrow' || anno.type === 'line') {
+                      cx = (anno.start.x + anno.end.x) / 2;
+                      cy = (anno.start.y + anno.end.y) / 2;
                  }
 
-                 ctx.strokeStyle = '#ef4444';
-                 ctx.lineWidth = 2 / (image.scale * anno.scale);
-                 ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                 ctx.save();
+                 ctx.translate(cx, cy);
+                 ctx.rotate(anno.rotation * Math.PI / 180);
+                 ctx.scale(anno.scale, anno.scale);
+                 ctx.translate(-cx, -cy);
 
-                 // Draw handles
-                 if (selectedAnnotations.length === 1) {
+                 if (anno.type === 'arrow' || anno.type === 'line') {
+                     // Draw start/end point handles
                      const handleSize = 8 / (image.scale * anno.scale * viewTransform.scale);
                      ctx.fillStyle = '#ffffff';
-                     // Scale Handle
-                     ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
-                     // Rotation Handle
-                     ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale) - handleSize/2, handleSize, handleSize);
-                     // Line to rotation handle
-                     ctx.beginPath();
-                     ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
-                     ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale));
-                     ctx.stroke();
+                     ctx.strokeStyle = '#ef4444';
+                     ctx.lineWidth = 1 / (image.scale * viewTransform.scale);
+                     
+                     ctx.beginPath(); ctx.arc(anno.start.x, anno.start.y, handleSize/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                     ctx.beginPath(); ctx.arc(anno.end.x, anno.end.y, handleSize/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                 } else {
+                     ctx.strokeStyle = '#ef4444';
+                     ctx.lineWidth = 2 / (image.scale * anno.scale);
+                     ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    
+                     // Draw handles
+                     if (selectedAnnotations.length === 1) {
+                         const handleSize = 8 / (image.scale * anno.scale * viewTransform.scale);
+                         ctx.fillStyle = '#ffffff';
+                         // Scale Handle
+                         ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
+                         // Rotation Handle
+                         ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale) - handleSize/2, handleSize, handleSize);
+                         // Line to rotation handle
+                         ctx.beginPath();
+                         ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
+                         ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale));
+                         ctx.stroke();
+                     }
                  }
-
                  ctx.restore();
             }
         });
@@ -496,19 +509,15 @@ export const drawCanvas = (
             const bounds = getGroupBounds(group, groups, images);
             if (bounds) {
                 ctx.save();
-                // Background/Frame for group
                 ctx.strokeStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(255, 255, 255, 0.3)';
                 ctx.lineWidth = 2 / viewTransform.scale;
                 ctx.setLineDash([5 / viewTransform.scale, 5 / viewTransform.scale]);
-                
-                // Optional: Light fill for "background" feel
                 ctx.fillStyle = selectedLayerId === group.id ? 'rgba(59, 130, 246, 0.05)' : 'rgba(255, 255, 255, 0.02)';
                 ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
 
                 ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
                 
                 if (group.showLabel) {
-                    // Label background
                     const fontSize = 14 / viewTransform.scale;
                     ctx.font = `bold ${fontSize}px sans-serif`;
                     const textMetrics = ctx.measureText(group.label);
@@ -519,7 +528,6 @@ export const drawCanvas = (
                     ctx.fillStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(50, 50, 50, 0.8)';
                     ctx.fillRect(bounds.x, bounds.y - labelHeight, labelWidth, labelHeight);
                     
-                    // Label Text
                     ctx.fillStyle = '#ffffff';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(group.label, bounds.x + padding, bounds.y - labelHeight / 2);
@@ -534,43 +542,53 @@ export const drawCanvas = (
         drawAnnotation(ctx, anno);
         if (selectedAnnotations.some(s => s.annotationId === anno.id && s.imageId === null)) {
              const bounds = getAnnotationPrimitiveBounds(anno, ctx);
-             ctx.save();
              let cx = 0, cy = 0;
              if (anno.type === 'rect') { cx = anno.x + anno.width/2; cy = anno.y + anno.height/2; }
              else if (anno.type === 'circle') { cx = anno.x; cy = anno.y; }
-             else if (anno.type === 'text') { cx = anno.x; cy = anno.y; }
+             else if (anno.type === 'text') { cx = bounds.x + bounds.width/2; cy = bounds.y + bounds.height/2; }
              else if (anno.type === 'freehand') {
                   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
                   anno.points.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
                   cx = minX + (maxX-minX)/2; cy = minY + (maxY-minY)/2;
-             }
-
-             if (anno.type !== 'line' && anno.type !== 'arrow') {
-                 ctx.translate(cx, cy);
-                 ctx.rotate(anno.rotation * Math.PI / 180);
-                 ctx.scale(anno.scale, anno.scale);
-                 ctx.translate(-cx, -cy);
+             } else if (anno.type === 'arrow' || anno.type === 'line') {
+                  cx = (anno.start.x + anno.end.x) / 2;
+                  cy = (anno.start.y + anno.end.y) / 2;
              }
              
-             ctx.strokeStyle = '#ef4444';
-             ctx.lineWidth = 2 / viewTransform.scale;
-             ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+             ctx.save();
+             ctx.translate(cx, cy);
+             ctx.rotate(anno.rotation * Math.PI / 180);
+             ctx.scale(anno.scale, anno.scale);
+             ctx.translate(-cx, -cy);
 
-             // Draw handles for single selection
-             if (selectedAnnotations.length === 1) {
-                 const handleSize = 8 / viewTransform.scale;
+             if (anno.type === 'arrow' || anno.type === 'line') {
+                 const handleSize = 8 / (anno.scale * viewTransform.scale);
                  ctx.fillStyle = '#ffffff';
-                 // Scale Handle
-                 ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
-                 // Rotation Handle
-                 ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/viewTransform.scale - handleSize/2, handleSize, handleSize);
-                 // Line to rotation handle
-                 ctx.beginPath();
-                 ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
-                 ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/viewTransform.scale);
-                 ctx.stroke();
+                 ctx.strokeStyle = '#ef4444';
+                 ctx.lineWidth = 1 / viewTransform.scale;
+                 
+                 ctx.beginPath(); ctx.arc(anno.start.x, anno.start.y, handleSize/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                 ctx.beginPath(); ctx.arc(anno.end.x, anno.end.y, handleSize/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+             } else {
+                 ctx.strokeStyle = '#ef4444';
+                 ctx.lineWidth = 2 / viewTransform.scale;
+                 ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    
+                 // Draw handles
+                 if (selectedAnnotations.length === 1) {
+                     const handleSize = 8 / (anno.scale * viewTransform.scale);
+                     ctx.fillStyle = '#ffffff';
+                     // Scale Handle
+                     ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
+                     // Rotation Handle
+                     ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/(anno.scale * viewTransform.scale) - handleSize/2, handleSize, handleSize);
+                     // Line to rotation handle
+                     ctx.beginPath();
+                     ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
+                     ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/(anno.scale * viewTransform.scale));
+                     ctx.stroke();
+                 }
              }
-
              ctx.restore();
         }
     });

@@ -248,7 +248,8 @@ const CanvasImageItem: React.FC<{
     };
 
     const formatDateTime = (date: Date) => {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (!date) return '';
+        return new Date(date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
 
     return (
@@ -307,7 +308,8 @@ const CanvasImageItem: React.FC<{
                                     {image.name}
                                 </span>
                             )}
-                            <span className="text-[10px] text-gray-500 truncate mt-0.5">
+                            {/* Add Date Display */}
+                            <span className="text-[10px] text-gray-500 truncate mt-0.5 select-none">
                                 {formatDateTime(image.createdAt)}
                             </span>
                         </div>
@@ -349,7 +351,7 @@ const CanvasImageItem: React.FC<{
                              {filteredTags.map(tag => (
                                  <div 
                                     key={tag}
-                                    className="px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 cursor-pointer"
+                                    className="px-2 py-1 text-xs text-gray-300 hover:bg-blue-600 hover:text-white cursor-pointer flex items-center"
                                     onClick={() => { onAddTag(image.id, tag); setTagInput(''); setShowTagSuggestions(false); }}
                                  >
                                      {tag}

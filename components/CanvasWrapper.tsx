@@ -197,68 +197,80 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       return null;
   }, [getUnboundedLocalPoint]);
 
+    const getAnnotationLocalPoint = useCallback((canvasPoint: Point, annotation: Annotation, image: CanvasImage | null, ctx: CanvasRenderingContext2D): Point => {
+        const annoPrimitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx);
+        
+        let center = { x: 0, y: 0 };
+        if (annotation.type === 'arrow' || annotation.type === 'line') {
+             center = { x: (annotation.start.x + annotation.end.x) / 2, y: (annotation.start.y + annotation.end.y) / 2 };
+        } else if (annotation.type === 'text') {
+             // Text center is based on bounding box center
+             center = { x: annoPrimitiveBounds.x + annoPrimitiveBounds.width / 2, y: annoPrimitiveBounds.y + annoPrimitiveBounds.height / 2 };
+        } else if (annotation.type === 'rect') {
+             center = { x: annotation.x + annotation.width / 2, y: annotation.y + annotation.height / 2 };
+        } else if (annotation.type === 'circle') {
+             center = { x: annotation.x, y: annotation.y };
+        } else if (annotation.type === 'freehand') {
+             center = { x: annoPrimitiveBounds.x + annoPrimitiveBounds.width / 2, y: annoPrimitiveBounds.y + annoPrimitiveBounds.height / 2 };
+        }
+
+        let parentSpacePoint: Point;
+        if (image) {
+            parentSpacePoint = getUnboundedLocalPoint(canvasPoint, image);
+        } else {
+            parentSpacePoint = canvasPoint;
+        }
+
+        let p = { x: parentSpacePoint.x - center.x, y: parentSpacePoint.y - center.y };
+        
+        const rad = -annotation.rotation * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
+        if (annotation.scale !== 0) {
+            p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
+        }
+        
+        return { x: p.x + center.x, y: p.y + center.y };
+    }, [getUnboundedLocalPoint]);
+
   const findAnnotationAtPoint = useCallback((canvasPoint: Point): { imageId: string | null, annotationId: string } | null => {
     const ctx = contextRef.current;
     if (!ctx) return null;
 
-    for (const image of [...images].reverse()) {
-        const localPointInImage = getUnboundedLocalPoint(canvasPoint, image);
+    const checkAnnotation = (annotation: Annotation, parentPoint: Point, imageScale: number = 1): boolean => {
+         const annoPrimitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx);
+         let center = { x: 0, y: 0 };
+         
+         if (annotation.type === 'arrow' || annotation.type === 'line') {
+             center = { x: (annotation.start.x + annotation.end.x) / 2, y: (annotation.start.y + annotation.end.y) / 2 };
+         } else if (annotation.type === 'text') {
+             center = { x: annoPrimitiveBounds.x + annoPrimitiveBounds.width / 2, y: annoPrimitiveBounds.y + annoPrimitiveBounds.height / 2 };
+         } else if (annotation.type === 'rect') {
+             center = { x: annotation.x + annotation.width / 2, y: annotation.y + annotation.height / 2 };
+         } else if (annotation.type === 'circle') {
+             center = { x: annotation.x, y: annotation.y };
+         } else if (annotation.type === 'freehand') {
+             center = { x: annoPrimitiveBounds.x + annoPrimitiveBounds.width / 2, y: annoPrimitiveBounds.y + annoPrimitiveBounds.height / 2 };
+         }
 
-        for (const annotation of [...image.annotations].reverse()) {
-            if (annotation.type === 'line' || annotation.type === 'arrow') {
-                const { start, end } = annotation;
-                const l2 = (end.x - start.x) ** 2 + (end.y - start.y) ** 2;
-                if (l2 === 0) continue;
+         // Transform point to annotation local space (undoing rotation/scale)
+         let p = { x: parentPoint.x - center.x, y: parentPoint.y - center.y };
+         const rad = -annotation.rotation * Math.PI / 180;
+         const cos = Math.cos(rad);
+         const sin = Math.sin(rad);
+         p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
+         if (annotation.scale !== 0) {
+             p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
+         }
+         const localPointInAnnotation = { x: p.x + center.x, y: p.y + center.y };
 
-                let t = ((localPointInImage.x - start.x) * (end.x - start.x) + (localPointInImage.y - start.y) * (end.y - start.y)) / l2;
-                t = Math.max(0, Math.min(1, t));
-
-                const closestPointOnSegment = {
-                    x: start.x + t * (end.x - start.x),
-                    y: start.y + t * (end.y - start.y),
-                };
-
-                const distance = Math.hypot(localPointInImage.x - closestPointOnSegment.x, localPointInImage.y - closestPointOnSegment.y);
-                const clickThreshold = (annotation.strokeWidth / 2) + (5 / (image.scale * viewTransform.scale));
-
-                if (distance < clickThreshold) {
-                    return { imageId: image.id, annotationId: annotation.id };
-                }
-            } else {
-                const primitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx);
-                const normalizedBounds = { ...primitiveBounds };
-                if (normalizedBounds.width < 0) { normalizedBounds.x += normalizedBounds.width; normalizedBounds.width *= -1; }
-                if (normalizedBounds.height < 0) { normalizedBounds.y += normalizedBounds.height; normalizedBounds.height *= -1; }
-
-                const center = {
-                    x: primitiveBounds.x + primitiveBounds.width / 2,
-                    y: primitiveBounds.y + primitiveBounds.height / 2,
-                };
-
-                let p = { x: localPointInImage.x - center.x, y: localPointInImage.y - center.y };
-                const rad = -annotation.rotation * Math.PI / 180;
-                const cos = Math.cos(rad);
-                const sin = Math.sin(rad);
-                p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-                if (annotation.scale !== 0) {
-                    p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
-                }
-                const localPointInAnnotation = { x: p.x + center.x, y: p.y + center.y };
-
-                if (isPointInRect(localPointInAnnotation, normalizedBounds)) {
-                    return { imageId: image.id, annotationId: annotation.id };
-                }
-            }
-        }
-    }
-
-    for (const annotation of [...canvasAnnotations].reverse()) {
-        if (annotation.type === 'line' || annotation.type === 'arrow') {
+         if (annotation.type === 'line' || annotation.type === 'arrow') {
             const { start, end } = annotation;
             const l2 = (end.x - start.x) ** 2 + (end.y - start.y) ** 2;
-            if (l2 === 0) continue;
+            if (l2 === 0) return false;
 
-            let t = ((canvasPoint.x - start.x) * (end.x - start.x) + (canvasPoint.y - start.y) * (end.y - start.y)) / l2;
+            let t = ((localPointInAnnotation.x - start.x) * (end.x - start.x) + (localPointInAnnotation.y - start.y) * (end.y - start.y)) / l2;
             t = Math.max(0, Math.min(1, t));
 
             const closestPointOnSegment = {
@@ -266,36 +278,32 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
                 y: start.y + t * (end.y - start.y),
             };
 
-            const distance = Math.hypot(canvasPoint.x - closestPointOnSegment.x, canvasPoint.y - closestPointOnSegment.y);
-            const clickThreshold = (annotation.strokeWidth / 2) + (5 / viewTransform.scale);
+            const distance = Math.hypot(localPointInAnnotation.x - closestPointOnSegment.x, localPointInAnnotation.y - closestPointOnSegment.y);
+            // Scale threshold by inverse of accumulated scale so visual hit tolerance is consistent
+            const clickThreshold = (annotation.strokeWidth / 2) + (5 / (imageScale * viewTransform.scale * annotation.scale));
 
-            if (distance < clickThreshold) {
-                return { imageId: null, annotationId: annotation.id };
-            }
-        } else {
-            const primitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx);
-            const normalizedBounds = { ...primitiveBounds };
+            return distance < clickThreshold;
+         } else {
+            const normalizedBounds = { ...annoPrimitiveBounds };
             if (normalizedBounds.width < 0) { normalizedBounds.x += normalizedBounds.width; normalizedBounds.width *= -1; }
             if (normalizedBounds.height < 0) { normalizedBounds.y += normalizedBounds.height; normalizedBounds.height *= -1; }
+            
+            return isPointInRect(localPointInAnnotation, normalizedBounds);
+         }
+    };
 
-            const center = {
-                x: primitiveBounds.x + primitiveBounds.width / 2,
-                y: primitiveBounds.y + primitiveBounds.height / 2,
-            };
-
-            let p = { x: canvasPoint.x - center.x, y: canvasPoint.y - center.y };
-            const rad = -annotation.rotation * Math.PI / 180;
-            const cos = Math.cos(rad);
-            const sin = Math.sin(rad);
-            p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-            if (annotation.scale !== 0) {
-                p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
+    for (const image of [...images].reverse()) {
+        const localPointInImage = getUnboundedLocalPoint(canvasPoint, image);
+        for (const annotation of [...image.annotations].reverse()) {
+            if (checkAnnotation(annotation, localPointInImage, image.scale)) {
+                return { imageId: image.id, annotationId: annotation.id };
             }
-            const localPointInAnnotation = { x: p.x + center.x, y: p.y + center.y };
+        }
+    }
 
-            if (isPointInRect(localPointInAnnotation, normalizedBounds)) {
-                return { imageId: null, annotationId: annotation.id };
-            }
+    for (const annotation of [...canvasAnnotations].reverse()) {
+        if (checkAnnotation(annotation, canvasPoint, 1)) {
+             return { imageId: null, annotationId: annotation.id };
         }
     }
     return null;
@@ -330,30 +338,6 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
     setViewTransform({ scale: newScale, offset: { x: newOffsetX, y: newOffsetY } });
   }, [viewTransform, setViewTransform]);
-
-    const getAnnotationLocalPoint = useCallback((canvasPoint: Point, annotation: Annotation, image: CanvasImage | null, ctx: CanvasRenderingContext2D): Point => {
-        const annoPrimitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx);
-        const center = { x: annoPrimitiveBounds.x + annoPrimitiveBounds.width / 2, y: annoPrimitiveBounds.y + annoPrimitiveBounds.height / 2 };
-
-        let parentSpacePoint: Point;
-        if (image) {
-            parentSpacePoint = getUnboundedLocalPoint(canvasPoint, image);
-        } else {
-            parentSpacePoint = canvasPoint;
-        }
-
-        let p = { x: parentSpacePoint.x - center.x, y: parentSpacePoint.y - center.y };
-        if (annotation.type !== 'arrow' && annotation.type !== 'line') {
-            const rad = -annotation.rotation * Math.PI / 180;
-            const cos = Math.cos(rad);
-            const sin = Math.sin(rad);
-            p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-            if (annotation.scale !== 0) {
-                p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
-            }
-        }
-        return { x: p.x + center.x, y: p.y + center.y };
-    }, [getUnboundedLocalPoint]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const canvas = internalCanvasRef.current;
@@ -435,10 +419,9 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
           
           if (annotation) {
               const localPointForAnnotation = getAnnotationLocalPoint(canvasPoint, annotation, image, ctx);
-              
               const baseScale = image ? image.scale : 1;
               const handleSize = 8 / (viewTransform.scale * baseScale);
-              const clickRadius = handleSize / (annotation.type === 'arrow' || annotation.type === 'line' ? 1 : annotation.scale) * 1.5;
+              const clickRadius = handleSize / annotation.scale * 1.5;
       
               if (annotation.type === 'arrow' || annotation.type === 'line') {
                   if (Math.hypot(localPointForAnnotation.x - annotation.start.x, localPointForAnnotation.y - annotation.start.y) < clickRadius) {
@@ -449,25 +432,42 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
                        setInteraction({ mode: 'resize-arrow-end', startPoint: canvasPoint, annotationId: annotation.id, imageId: image?.id ?? null });
                        return;
                   }
-              } else {
-                  const bounds = getAnnotationPrimitiveBounds(annotation, ctx);
-                  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-                  const rotationHandleOffset = 20 / (viewTransform.scale * baseScale * annotation.scale);
-                  const scaleHandlePos = { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
-                  const rotationHandlePos = { x: center.x, y: bounds.y - rotationHandleOffset };
-      
-                  if (Math.hypot(localPointForAnnotation.x - scaleHandlePos.x, localPointForAnnotation.y - scaleHandlePos.y) < clickRadius) {
-                      const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
-                      const startDist = Math.hypot(parentSpaceClickPoint.x - center.x, parentSpaceClickPoint.y - center.y);
-                      setInteraction({ mode: 'scale-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startScale: annotation.scale, startDist: startDist });
-                      return;
-                  }
-                  if (Math.hypot(localPointForAnnotation.x - rotationHandlePos.x, localPointForAnnotation.y - rotationHandlePos.y) < clickRadius) {
-                      const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
-                      const startAngle = Math.atan2(parentSpaceClickPoint.y - center.y, parentSpaceClickPoint.x - center.x);
-                      setInteraction({ mode: 'rotate-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startRotation: annotation.rotation, startAngle: startAngle });
-                      return;
-                  }
+              } 
+              
+              // Allow rotation/scale for ALL types including Arrow/Line
+              const bounds = getAnnotationPrimitiveBounds(annotation, ctx);
+              let center = { x: 0, y: 0 };
+              if (annotation.type === 'arrow' || annotation.type === 'line') {
+                  center = { x: (annotation.start.x + annotation.end.x) / 2, y: (annotation.start.y + annotation.end.y) / 2 };
+              } else if (annotation.type === 'text') {
+                  center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+              } else if (annotation.type === 'rect') {
+                  center = { x: annotation.x + annotation.width / 2, y: annotation.y + annotation.height / 2 };
+              } else if (annotation.type === 'circle') {
+                  center = { x: annotation.x, y: annotation.y };
+              } else if (annotation.type === 'freehand') {
+                  center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+              }
+              
+              const rotationHandleOffset = 20 / (viewTransform.scale * baseScale * annotation.scale);
+              const scaleHandlePos = { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
+              const rotationHandlePos = { x: center.x, y: bounds.y - rotationHandleOffset };
+              
+              // For lines/arrows, bounds are min/max points. Center is midpoint.
+              // We want scale handle at bottom-right of bbox?
+              // Visual handles are drawn at bounds corners.
+  
+              if (Math.hypot(localPointForAnnotation.x - scaleHandlePos.x, localPointForAnnotation.y - scaleHandlePos.y) < clickRadius) {
+                  const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
+                  const startDist = Math.hypot(parentSpaceClickPoint.x - center.x, parentSpaceClickPoint.y - center.y);
+                  setInteraction({ mode: 'scale-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startScale: annotation.scale, startDist: startDist });
+                  return;
+              }
+              if (Math.hypot(localPointForAnnotation.x - rotationHandlePos.x, localPointForAnnotation.y - rotationHandlePos.y) < clickRadius) {
+                  const parentSpaceClickPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
+                  const startAngle = Math.atan2(parentSpaceClickPoint.y - center.y, parentSpaceClickPoint.x - center.x);
+                  setInteraction({ mode: 'rotate-annotation', startPoint: canvasPoint, center: center, annotationId: annotation.id, imageId: image?.id ?? null, startRotation: annotation.rotation, startAngle: startAngle });
+                  return;
               }
           }
       }
@@ -714,7 +714,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
         if (!annotation || (annotation.type !== 'arrow' && annotation.type !== 'line')) return;
         
-        let localPoint = image ? getUnboundedLocalPoint(canvasPoint, image) : canvasPoint;
+        // Get annotation local point (transforming back from visual rotation)
+        let localPoint = getAnnotationLocalPoint(canvasPoint, annotation, image, ctx);
         
         if (e.shiftKey) {
             const anchorPoint = interaction.mode === 'resize-arrow-start' 

@@ -437,7 +437,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                     <button onClick={handleUploadClick} disabled={isDisabled} className="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
                         <UploadIcon /> <span className="ml-2">Upload Images</span>
                     </button>
-                     <p className="text-xs text-gray-500 mt-2 text-center">or drag & drop / paste from clipboard</p>
+                     <p className="text-xs text-gray-500 mt-2 text-center">or drag & drop / paste from clipboard (Ctrl+V)</p>
                 </div>
 
                  <div className="space-y-3 pt-3 border-t border-gray-800">

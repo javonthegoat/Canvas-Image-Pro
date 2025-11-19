@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+// FIX: Corrected import paths for being inside src/ directory
 import { LeftSidebar } from './components/LeftSidebar';
 import { LayersPanel } from './components/LayersPanel';
 import { CanvasWrapper } from './components/CanvasWrapper';
@@ -234,8 +235,7 @@ const App: React.FC = () => {
   const canvasAnnotations = liveCanvasAnnotations ?? currentHistoryState.canvasAnnotations;
 
   const [lastArrangement, setLastArrangement] = useState<LastArrangement>(null);
-  // Separate clipboard for annotations
-  const [annotationClipboard, setAnnotationClipboard] = useState<{ selections: AnnotationSelection[] } | null>(null);
+  const [clipboard, setClipboard] = useState<{ selections: AnnotationSelection[] } | null>(null);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -319,7 +319,7 @@ const App: React.FC = () => {
     if (canRedo) {
       setAppState(prev => ({ 
         ...prev, 
-        liveImages: null,
+        liveImages: null, 
         liveCanvasAnnotations: null,
         historyIndex: prev.historyIndex + 1,
         selectedImageIds: [],
@@ -397,23 +397,39 @@ const App: React.FC = () => {
       return () => window.removeEventListener('paste', handlePaste);
   }, [images, groups, canvasAnnotations, viewTransform, pushHistory]);
 
-  // Copy/Paste Annotations
+  // Copy/Paste Annotations & Global Shortcuts
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
           const target = e.target as HTMLElement;
           const isEditingText = ['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable;
           if (isEditingText) return;
 
+          const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+
+          // Undo: Ctrl+Z
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+              e.preventDefault();
+              handleUndo();
+              return;
+          }
+
+          // Redo: Ctrl+Y or Ctrl+Shift+Z
+          if (isCtrlOrMeta && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+              e.preventDefault();
+              handleRedo();
+              return;
+          }
+
           // Copy
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'c') {
               if (selectedAnnotations.length > 0) {
-                  setAnnotationClipboard({ selections: selectedAnnotations });
+                  setClipboard({ selections: selectedAnnotations });
               }
           }
 
           // Paste
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-              if (annotationClipboard && annotationClipboard.selections.length > 0) {
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'v') {
+              if (clipboard && clipboard.selections.length > 0) {
                   e.preventDefault();
                   
                   const newAnnotations: Annotation[] = [];
@@ -438,7 +454,7 @@ const App: React.FC = () => {
                       return copy;
                   };
 
-                  annotationClipboard.selections.forEach(sel => {
+                  clipboard.selections.forEach(sel => {
                       if (sel.imageId) {
                           const imgIndex = nextImages.findIndex(i => i.id === sel.imageId);
                           if (imgIndex !== -1) {
@@ -467,17 +483,17 @@ const App: React.FC = () => {
           }
 
           // Shortcuts
-          if (e.key.toLowerCase() === 's' && !e.repeat) {
+          if (e.key.toLowerCase() === 's' && !e.repeat && !isCtrlOrMeta) {
             setActiveTool('select');
           }
-          if (e.key.toLowerCase() === 'i' && !e.repeat) {
+          if (e.key.toLowerCase() === 'i' && !e.repeat && !isCtrlOrMeta) {
             setActiveTool('eyedropper');
           }
       };
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedAnnotations, annotationClipboard, images, groups, canvasAnnotations, pushHistory]);
+  }, [selectedAnnotations, clipboard, images, groups, canvasAnnotations, pushHistory, handleUndo, handleRedo]);
 
   const handleFileChange = useCallback(async (files: FileList | null) => {
     if (!files) return;
@@ -1281,8 +1297,6 @@ const App: React.FC = () => {
     if (selectedImageIds.length === 0) return;
 
     // Treat every selected image individually, ignoring group structure for arrangement
-    // If the selection includes group IDs, `selectedImageIds` will contain all child IDs because `handleSelectLayer` populates them.
-    // So we can just map the IDs to images.
     const arrangeableItems = selectedImageIds
         .map(id => images.find(img => img.id === id))
         .filter((img): img is CanvasImage => !!img)
@@ -1319,7 +1333,7 @@ const App: React.FC = () => {
     const minX = Math.min(...gridInput.map(i => i.x));
     const minY = Math.min(...gridInput.map(i => i.y));
 
-    // Run Layout with increased spacing for visibility
+    // Run Layout with increased spacing
     const newPositions = arrangeItemsInGrid(gridInput, direction, minX, minY, 30);
 
     // Apply updates
@@ -1358,7 +1372,7 @@ const App: React.FC = () => {
     const selectionBounds = getImagesBounds(selectedImagesInOrder);
     if (!selectionBounds) return;
 
-    const SPACING = 20; // Increased spacing
+    const SPACING = 20; 
     const allNewPositions: { [id: string]: { x: number; y: number } } = {};
     
     let currentX = 0;
@@ -1821,8 +1835,7 @@ const App: React.FC = () => {
     if (selectedImageIds.length === 0) return;
     const mimeType = `image/${exportFormat}`;
     const extension = exportFormat === 'png' ? '.png' : '.jpg';
-    // Reverse images so top layer is first
-    const selected = [...images].reverse().filter(img => selectedImageIds.includes(img.id));
+    const selected = images.filter(img => selectedImageIds.includes(img.id));
 
     if (selected.length === 1) {
         const image = selected[0];
@@ -1879,13 +1892,11 @@ const App: React.FC = () => {
     
     const zip = new JSZip();
     const nameCounts: { [key: string]: number } = {};
-    // Reverse images so top layer is first
-    const reversedImages = [...images].reverse();
-    const totalImages = reversedImages.length;
+    const totalImages = images.length;
     const padding = String(totalImages).length;
 
     for (let i = 0; i < totalImages; i++) {
-        const image = reversedImages[i];
+        const image = images[i];
         const dataUrl = generateImageWithAnnotations(image, mimeType);
         const base64Data = dataUrl.substring(dataUrl.indexOf(',') + 1);
 
@@ -2332,6 +2343,8 @@ const App: React.FC = () => {
                initialPosition={floatingEditorPosition}
                selectedAnnotations={selectedAnnotationObjects}
                onUpdate={updateSelectedAnnotationsForInteraction}
+               onCompleteUpdate={updateSelectedAnnotations}
+               onCommit={commitInteraction}
                onDelete={deleteSelectedAnnotations}
              />
          )}

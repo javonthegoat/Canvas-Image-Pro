@@ -7,6 +7,8 @@ interface FloatingAnnotationEditorProps {
   style: React.CSSProperties;
   selectedAnnotations: Annotation[];
   onUpdate: (changes: Partial<Annotation>) => void;
+  onCompleteUpdate?: (changes: Partial<Annotation>) => void;
+  onCommit?: () => void;
   onDelete: () => void;
   initialPosition?: { top: number, left: number };
 }
@@ -15,50 +17,52 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   style,
   selectedAnnotations,
   onUpdate,
+  onCompleteUpdate,
+  onCommit,
   onDelete,
   initialPosition,
 }, ref) => {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [hasBeenDragged, setHasBeenDragged] = useState(false);
+  const [lastInitialPosition, setLastInitialPosition] = useState(initialPosition);
 
-  // Reset drag state only when selection changes entirely, but try to keep position stable if possible
-  // Actually, if selection changes, we likely want to reset to the new initialPosition unless dragged?
-  // Let's stick to: if props.initialPosition changes significantly, reset, otherwise keep dragged position?
-  // Simpler: Always use initialPosition unless currently dragging or has been dragged for this selection.
-  
-  const selectionKey = selectedAnnotations.map(a => a.id).sort().join(',');
-
+  // If initialPosition changes drastically (e.g. new selection), update our position unless dragging
   useEffect(() => {
-      setHasBeenDragged(false);
-      setPosition(null);
-  }, [selectionKey]);
-
-  const currentPosition = useMemo(() => {
-      if (isDragging && position) return position;
-      if (hasBeenDragged && position) return position;
-      return initialPosition || null;
-  }, [isDragging, hasBeenDragged, position, initialPosition]);
+      if (!isDragging && initialPosition) {
+         // Simple check if position changed significantly or first render
+         if (!lastInitialPosition || 
+             Math.abs(initialPosition.top - lastInitialPosition.top) > 1 || 
+             Math.abs(initialPosition.left - lastInitialPosition.left) > 1) {
+             setPosition(initialPosition);
+             setLastInitialPosition(initialPosition);
+         }
+      }
+  }, [initialPosition, isDragging, lastInitialPosition]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation(); // Important to prevent deselecting
+    e.stopPropagation(); // Prevent deselecting
     const editor = (ref as React.RefObject<HTMLDivElement>)?.current;
     if (!editor) return;
+    
+    // Allow input interaction without dragging
+    if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+        return;
+    }
+
     e.preventDefault();
     const rect = editor.getBoundingClientRect();
     setIsDragging(true);
-    setHasBeenDragged(true);
     setDragOffset({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     });
-    setPosition({ top: rect.top, left: rect.left });
   }, [ref]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging) return;
+      e.preventDefault();
       setPosition({
         left: e.clientX - dragOffset.x,
         top: e.clientY - dragOffset.y,
@@ -77,17 +81,18 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   }, [isDragging, dragOffset]);
 
   const finalStyle = useMemo((): React.CSSProperties => {
-    if (currentPosition) {
+    if (position) {
       return {
         ...style,
         position: 'fixed',
-        top: `${currentPosition.top}px`,
-        left: `${currentPosition.left}px`,
-        transform: 'none', // Override any centering transform if present in style
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+        transform: 'none',
+        zIndex: 100,
       };
     }
     return { ...style, display: 'none' };
-  }, [style, currentPosition]);
+  }, [style, position]);
 
   const commonProps = useMemo(() => {
     if (selectedAnnotations.length === 0) return {};
@@ -136,11 +141,11 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
     <div
       ref={ref}
       style={finalStyle}
-      className="absolute bg-gray-800 border border-gray-700 rounded-lg shadow-2xl z-20 p-3 w-60 space-y-3 text-sm"
+      className="absolute bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3 w-60 space-y-3 text-sm"
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div 
-        className="flex items-center justify-between pb-2 border-b border-gray-700 cursor-move"
+        className="flex items-center justify-between pb-2 border-b border-gray-700 cursor-move select-none"
         onMouseDown={handleMouseDown}
       >
         <h3 className="font-bold text-gray-200">
@@ -150,6 +155,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
           onClick={onDelete}
           className="p-1 text-gray-400 hover:text-red-500 hover:bg-gray-700 rounded-md"
           title="Delete Selection"
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <TrashIcon />
         </button>
@@ -160,6 +166,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
         color={commonProps.color === 'multi' ? '#ffffff' : commonProps.color}
         showMixed={commonProps.color === 'multi'}
         onChange={newColor => onUpdate({ color: newColor })}
+        onCommit={onCommit}
       />
 
       {hasGeometricProps && (
@@ -175,6 +182,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                 max="50"
                 value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
                 onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
+                onMouseUp={onCommit}
+                onTouchEnd={onCommit}
                 className="w-full"
                 disabled={commonProps.strokeWidth === 'multi' || isMixedStroke}
                 title={isMixedStroke ? "Cannot edit border width for mixed selection of shapes and text." : ""}
@@ -187,6 +196,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                   color={commonProps.fillColor === 'multi' ? '#ffffff' : commonProps.fillColor}
                   showMixed={commonProps.fillColor === 'multi'}
                   onChange={newColor => onUpdate({ fillColor: newColor })}
+                  onCommit={onCommit}
                   preventFocusSteal
                 />
                 <div>
@@ -200,6 +210,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                     step="0.1"
                     value={commonProps.fillOpacity === 'multi' ? 0 : commonProps.fillOpacity}
                     onChange={e => onUpdate({ fillOpacity: parseFloat(e.target.value) })}
+                    onMouseUp={onCommit}
+                    onTouchEnd={onCommit}
                     className="w-full"
                     disabled={commonProps.fillOpacity === 'multi'}
                   />
@@ -215,6 +227,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
           <textarea
             value={(selectedAnnotations[0] as TextAnnotation).text}
             onChange={(e) => onUpdate({ text: e.target.value })}
+            onBlur={onCommit}
             rows={4}
             className="w-full bg-gray-900 text-sm text-gray-200 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 p-2"
             onKeyDown={(e) => e.stopPropagation()}
@@ -234,6 +247,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
               max="128"
               value={commonProps.fontSize === 'multi' ? 32 : commonProps.fontSize}
               onChange={e => onUpdate({ fontSize: parseInt(e.target.value, 10) })}
+              onMouseUp={onCommit}
+              onTouchEnd={onCommit}
               className="w-full"
               disabled={commonProps.fontSize === 'multi'}
             />
@@ -242,7 +257,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
             <label className="block text-sm font-medium mb-1">Font Family</label>
             <select
               value={commonProps.fontFamily === 'multi' ? '' : commonProps.fontFamily}
-              onChange={e => onUpdate({ fontFamily: e.target.value })}
+              onChange={e => onCompleteUpdate ? onCompleteUpdate({ fontFamily: e.target.value }) : onUpdate({ fontFamily: e.target.value })}
               className="w-full bg-gray-900 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500"
               disabled={commonProps.fontFamily === 'multi'}
             >
@@ -258,6 +273,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                   color={commonProps.backgroundColor === 'multi' ? '#ffffff' : commonProps.backgroundColor}
                   showMixed={commonProps.backgroundColor === 'multi'}
                   onChange={newColor => onUpdate({ backgroundColor: newColor })}
+                  onCommit={onCommit}
                   preventFocusSteal
               />
               <div>
@@ -271,6 +287,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                       step="0.1"
                       value={commonProps.backgroundOpacity === 'multi' ? 0 : commonProps.backgroundOpacity}
                       onChange={e => onUpdate({ backgroundOpacity: parseFloat(e.target.value) })}
+                      onMouseUp={onCommit}
+                      onTouchEnd={onCommit}
                       className="w-full"
                       disabled={commonProps.backgroundOpacity === 'multi'}
                   />
@@ -284,6 +302,7 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                   color={commonProps.strokeColor === 'multi' ? '#ffffff' : commonProps.strokeColor}
                   showMixed={commonProps.strokeColor === 'multi'}
                   onChange={newColor => onUpdate({ strokeColor: newColor })}
+                  onCommit={onCommit}
                   preventFocusSteal
               />
               <div>
@@ -297,6 +316,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                       step="0.1"
                       value={commonProps.strokeOpacity === 'multi' ? 0 : commonProps.strokeOpacity}
                       onChange={e => onUpdate({ strokeOpacity: parseFloat(e.target.value) })}
+                      onMouseUp={onCommit}
+                      onTouchEnd={onCommit}
                       className="w-full"
                       disabled={commonProps.strokeOpacity === 'multi'}
                   />
@@ -311,6 +332,8 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
                       max="20"
                       value={commonProps.strokeWidth === 'multi' ? 0 : commonProps.strokeWidth}
                       onChange={e => onUpdate({ strokeWidth: parseInt(e.target.value, 10) })}
+                      onMouseUp={onCommit}
+                      onTouchEnd={onCommit}
                       className="w-full"
                       disabled={commonProps.strokeWidth === 'multi' || isMixedStroke}
                       title={isMixedStroke ? "Cannot edit stroke width for mixed selection of text and shapes." : ""}

@@ -5,9 +5,10 @@ interface ColorPickerProps {
   color: string;
   onChange: (newColor: string) => void;
   onClose: () => void;
+  onCommit?: () => void;
 }
 
-const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose }) => {
+const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose, onCommit }) => {
   const safeColor = color && /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/i.test(color) ? color : '#000000';
   
   const [hsv, setHsv] = useState<HSV>(() => {
@@ -77,12 +78,13 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose }) =
     const onMouseUp = () => {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
+      if (onCommit) onCommit();
     };
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
 
-  }, [handleHsvChange]);
+  }, [handleHsvChange, onCommit]);
 
   const hueColor = rgbToHex(hsvToRgb({ h: hsv.h, s: 100, v: 100 }));
   const satValStyle = {
@@ -117,6 +119,8 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose }) =
             max="359"
             value={hsv.h}
             onChange={(e) => handleHsvChange({ h: parseInt(e.target.value, 10) })}
+            onMouseUp={onCommit}
+            onTouchEnd={onCommit}
             className="w-full h-full appearance-none rounded-md cursor-pointer hue-slider"
             style={{'--thumb-color': hueColor } as React.CSSProperties}
           />
@@ -128,6 +132,7 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose }) =
                     type="text"
                     value={hex.substring(1)}
                     onChange={handleHexChange}
+                    onBlur={onCommit}
                     className="w-full bg-transparent p-1 text-sm text-white focus:outline-none"
                     maxLength={6}
                 />
@@ -160,7 +165,7 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose }) =
   );
 };
 
-export const ColorInput: React.FC<{ label: string; color: string; onChange: (newColor: string) => void; showMixed?: boolean; preventFocusSteal?: boolean; }> = ({ label, color, onChange, showMixed, preventFocusSteal }) => {
+export const ColorInput: React.FC<{ label: string; color: string; onChange: (newColor: string) => void; showMixed?: boolean; preventFocusSteal?: boolean; onCommit?: () => void; }> = ({ label, color, onChange, showMixed, preventFocusSteal, onCommit }) => {
   const [isOpen, setIsOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -197,7 +202,7 @@ export const ColorInput: React.FC<{ label: string; color: string; onChange: (new
                 }
             } : undefined}
         >
-          <ColorPicker color={color} onChange={onChange} onClose={() => setIsOpen(false)}/>
+          <ColorPicker color={color} onChange={onChange} onClose={() => setIsOpen(false)} onCommit={onCommit}/>
         </div>
       )}
       <style>{`
