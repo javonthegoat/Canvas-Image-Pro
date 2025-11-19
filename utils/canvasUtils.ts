@@ -436,10 +436,8 @@ export const drawCanvas = (
         image.annotations.forEach(anno => {
             drawAnnotation(ctx, anno);
             if (selectedAnnotations.some(s => s.annotationId === anno.id && s.imageId === image.id)) {
-                // Draw selection box
+                // Draw selection box and handles
                  const bounds = getAnnotationPrimitiveBounds(anno, ctx); 
-                 // This is unrotated primitive bounds. 
-                 // We need to draw selection in the annotation's local space including rotation/scale
                  
                  ctx.save();
                  let cx = 0, cy = 0;
@@ -461,8 +459,23 @@ export const drawCanvas = (
 
                  ctx.strokeStyle = '#ef4444';
                  ctx.lineWidth = 2 / (image.scale * anno.scale);
-                 // Use primitive bounds x,y,w,h
                  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+
+                 // Draw handles
+                 if (selectedAnnotations.length === 1) {
+                     const handleSize = 8 / (image.scale * anno.scale * viewTransform.scale);
+                     ctx.fillStyle = '#ffffff';
+                     // Scale Handle
+                     ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
+                     // Rotation Handle
+                     ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale) - handleSize/2, handleSize, handleSize);
+                     // Line to rotation handle
+                     ctx.beginPath();
+                     ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
+                     ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/(image.scale * anno.scale * viewTransform.scale));
+                     ctx.stroke();
+                 }
+
                  ctx.restore();
             }
         });
@@ -540,8 +553,24 @@ export const drawCanvas = (
              }
              
              ctx.strokeStyle = '#ef4444';
-             ctx.lineWidth = 2;
+             ctx.lineWidth = 2 / viewTransform.scale;
              ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+
+             // Draw handles for single selection
+             if (selectedAnnotations.length === 1) {
+                 const handleSize = 8 / viewTransform.scale;
+                 ctx.fillStyle = '#ffffff';
+                 // Scale Handle
+                 ctx.fillRect(bounds.x + bounds.width - handleSize/2, bounds.y + bounds.height - handleSize/2, handleSize, handleSize);
+                 // Rotation Handle
+                 ctx.fillRect(bounds.x + bounds.width/2 - handleSize/2, bounds.y - 20/viewTransform.scale - handleSize/2, handleSize, handleSize);
+                 // Line to rotation handle
+                 ctx.beginPath();
+                 ctx.moveTo(bounds.x + bounds.width/2, bounds.y);
+                 ctx.lineTo(bounds.x + bounds.width/2, bounds.y - 20/viewTransform.scale);
+                 ctx.stroke();
+             }
+
              ctx.restore();
         }
     });
@@ -567,7 +596,7 @@ export const drawCanvas = (
         ctx.strokeRect(marqueeRect.x, marqueeRect.y, marqueeRect.width, marqueeRect.height);
     }
     
-    // Multi-selection bounds
+    // Multi-selection bounds handles
     if (selectedAnnotations.length > 1) {
         const multiBounds = getMultiAnnotationBounds(selectedAnnotations, images, canvasAnnotations, ctx);
         if (multiBounds) {
@@ -576,6 +605,19 @@ export const drawCanvas = (
             ctx.setLineDash([4 / viewTransform.scale, 2 / viewTransform.scale]);
             ctx.strokeRect(multiBounds.x, multiBounds.y, multiBounds.width, multiBounds.height);
             ctx.setLineDash([]);
+
+            // Draw Handles
+            const handleSize = 8 / viewTransform.scale;
+            ctx.fillStyle = '#ffffff';
+            // Scale Handle
+            ctx.fillRect(multiBounds.x + multiBounds.width - handleSize/2, multiBounds.y + multiBounds.height - handleSize/2, handleSize, handleSize);
+            // Rotation Handle
+            ctx.fillRect(multiBounds.x + multiBounds.width/2 - handleSize/2, multiBounds.y - 20/viewTransform.scale - handleSize/2, handleSize, handleSize);
+            // Line to rotation handle
+            ctx.beginPath();
+            ctx.moveTo(multiBounds.x + multiBounds.width/2, multiBounds.y);
+            ctx.lineTo(multiBounds.x + multiBounds.width/2, multiBounds.y - 20/viewTransform.scale);
+            ctx.stroke();
         }
     }
 

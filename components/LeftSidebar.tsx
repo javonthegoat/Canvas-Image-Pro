@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, AspectRatio, AnnotationTool, Rect, Annotation, TextAnnotation, Group } from '../types';
 import { UploadIcon, ZoomInIcon, ZoomOutIcon, RotateCwIcon, CropIcon, PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, UndoIcon, RedoIcon, ArrowIcon, XIcon, SendToBackIcon, ChevronDownIcon, ChevronUpIcon, BringToFrontIcon, AlignLeftIcon, AlignHorizontalCenterIcon, AlignRightIcon, AlignTopIcon, AlignVerticalCenterIcon, AlignBottomIcon, CopyIcon, DownloadIcon, LineIcon, ArrangeHorizontalIcon, ArrangeVerticalIcon, EyedropperIcon, MaximizeIcon, SaveIcon, FolderOpenIcon, LayersIcon, DistributeHorizontalIcon, DistributeVerticalIcon, MatchWidthIcon, MatchHeightIcon, StackHorizontalIcon, StackVerticalIcon, SlidersIcon } from './icons';
@@ -146,7 +145,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   
   const aspectRatios: AspectRatio[] = ['free', '1:1', '4:3', '16:9'];
   const tools: { name: AnnotationTool, icon: React.ReactNode, title: string }[] = [
-    { name: 'select', icon: <MousePointerIcon />, title: 'Select & Move (V)' },
+    { name: 'select', icon: <MousePointerIcon />, title: 'Select & Move (S)' },
     { name: 'eyedropper', icon: <EyedropperIcon />, title: 'Eyedropper (I)' },
     { name: 'line', icon: <LineIcon />, title: 'Draw Line' },
     { name: 'arrow', icon: <ArrowIcon />, title: 'Draw Arrow' },

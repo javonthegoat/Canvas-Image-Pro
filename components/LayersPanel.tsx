@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, Annotation, Group } from '../types';
 import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon, EyeIcon, EyeOffIcon, TagIcon, ChevronsUpDownIcon, SearchIcon, XIcon } from './icons';
@@ -248,6 +247,10 @@ const CanvasImageItem: React.FC<{
         }
     };
 
+    const formatDateTime = (date: Date) => {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+
     return (
         <div className="relative border-b border-gray-800/50">
             <div
@@ -286,23 +289,28 @@ const CanvasImageItem: React.FC<{
                     </div>
 
                     {/* Name or Input */}
-                    <div className="flex-1 min-w-0 truncate">
-                        {isRenaming ? (
-                            <input
-                                ref={inputRef}
-                                type="text"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                onBlur={handleRename}
-                                onKeyDown={(e) => { if(e.key === 'Enter') handleRename(); }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="w-full bg-gray-900 text-white px-1 py-0.5 rounded border border-blue-500 outline-none text-xs"
-                            />
-                        ) : (
-                            <span onDoubleClick={(e) => { e.stopPropagation(); setIsRenaming(true); }} className="block truncate text-xs font-medium select-none">
-                                {image.name}
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                        <div className="flex flex-col">
+                             {isRenaming ? (
+                                <input
+                                    ref={inputRef}
+                                    type="text"
+                                    value={name}
+                                    onChange={(e) => setName(e.target.value)}
+                                    onBlur={handleRename}
+                                    onKeyDown={(e) => { if(e.key === 'Enter') handleRename(); }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="w-full bg-gray-900 text-white px-1 py-0.5 rounded border border-blue-500 outline-none text-xs"
+                                />
+                            ) : (
+                                <span onDoubleClick={(e) => { e.stopPropagation(); setIsRenaming(true); }} className="block truncate text-xs font-medium select-none">
+                                    {image.name}
+                                </span>
+                            )}
+                            <span className="text-[10px] text-gray-500 truncate mt-0.5">
+                                {formatDateTime(image.createdAt)}
                             </span>
-                        )}
+                        </div>
                     </div>
                     
                     {/* Actions */}

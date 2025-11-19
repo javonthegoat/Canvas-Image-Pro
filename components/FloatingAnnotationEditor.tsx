@@ -8,6 +8,7 @@ interface FloatingAnnotationEditorProps {
   selectedAnnotations: Annotation[];
   onUpdate: (changes: Partial<Annotation>) => void;
   onDelete: () => void;
+  initialPosition?: { top: number, left: number };
 }
 
 export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnotationEditorProps>(({
@@ -15,29 +16,44 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   selectedAnnotations,
   onUpdate,
   onDelete,
+  initialPosition,
 }, ref) => {
-  // State for dragging
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [hasBeenDragged, setHasBeenDragged] = useState(false);
 
-  const selectedAnnotationIds = useMemo(() => selectedAnnotations.map(a => a.id).sort().join(','), [selectedAnnotations]);
+  // Reset drag state only when selection changes entirely, but try to keep position stable if possible
+  // Actually, if selection changes, we likely want to reset to the new initialPosition unless dragged?
+  // Let's stick to: if props.initialPosition changes significantly, reset, otherwise keep dragged position?
+  // Simpler: Always use initialPosition unless currently dragging or has been dragged for this selection.
+  
+  const selectionKey = selectedAnnotations.map(a => a.id).sort().join(',');
 
   useEffect(() => {
-    setPosition(null);
-  }, [selectedAnnotationIds]);
+      setHasBeenDragged(false);
+      setPosition(null);
+  }, [selectionKey]);
+
+  const currentPosition = useMemo(() => {
+      if (isDragging && position) return position;
+      if (hasBeenDragged && position) return position;
+      return initialPosition || null;
+  }, [isDragging, hasBeenDragged, position, initialPosition]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation(); // Important to prevent deselecting
     const editor = (ref as React.RefObject<HTMLDivElement>)?.current;
     if (!editor) return;
     e.preventDefault();
     const rect = editor.getBoundingClientRect();
-    setPosition({ top: rect.top, left: rect.left });
     setIsDragging(true);
+    setHasBeenDragged(true);
     setDragOffset({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     });
+    setPosition({ top: rect.top, left: rect.left });
   }, [ref]);
 
   useEffect(() => {
@@ -61,17 +77,17 @@ export const FloatingAnnotationEditor = forwardRef<HTMLDivElement, FloatingAnnot
   }, [isDragging, dragOffset]);
 
   const finalStyle = useMemo((): React.CSSProperties => {
-    if (position) {
+    if (currentPosition) {
       return {
         ...style,
         position: 'fixed',
-        top: `${position.top}px`,
-        left: `${position.left}px`,
-        transform: 'none',
+        top: `${currentPosition.top}px`,
+        left: `${currentPosition.left}px`,
+        transform: 'none', // Override any centering transform if present in style
       };
     }
-    return style;
-  }, [style, position]);
+    return { ...style, display: 'none' };
+  }, [style, currentPosition]);
 
   const commonProps = useMemo(() => {
     if (selectedAnnotations.length === 0) return {};
