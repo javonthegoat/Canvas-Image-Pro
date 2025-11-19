@@ -1158,7 +1158,7 @@ const App: React.FC = () => {
     // Identify top-level entities (Groups or Images)
     const selectedIdsSet = new Set(selectedImageIds);
     const processedImageIds = new Set<string>();
-    const arrangeableItems: { type: 'group' | 'image', data: Group | CanvasImage, bounds: Rect }[] = [];
+    let arrangeableItems: { type: 'group' | 'image', data: Group | CanvasImage, bounds: Rect }[] = [];
 
     // 1. Find fully selected groups
     const fullySelectedGroups = groups.filter(g => {
@@ -1202,6 +1202,36 @@ const App: React.FC = () => {
             }
         }
     });
+
+    // SPECIAL CASE: If there's only 1 item and it's a GROUP, unpack it.
+    // This means the user likely selected a group and wants to arrange its contents.
+    if (arrangeableItems.length === 1 && arrangeableItems[0].type === 'group') {
+         const group = arrangeableItems[0].data as Group;
+         arrangeableItems = []; // Clear and refill with children
+
+         // Add immediate images of the group
+         group.imageIds.forEach(id => {
+             const img = images.find(i => i.id === id);
+             if (img) {
+                 arrangeableItems.push({
+                     type: 'image',
+                     data: img,
+                     bounds: { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale }
+                 });
+             }
+         });
+
+         // Add immediate subgroups
+         group.groupIds.forEach(id => {
+             const g = groups.find(sub => sub.id === id);
+             if (g) {
+                 const b = getGroupBounds(g, groups, images);
+                 if (b) {
+                     arrangeableItems.push({ type: 'group', data: g, bounds: b });
+                 }
+             }
+         });
+    }
 
     if (arrangeableItems.length === 0) return;
 
@@ -1349,7 +1379,7 @@ const App: React.FC = () => {
     if (!cropArea || cropArea.width === 0 || cropArea.height === 0) return;
 
     const mimeType = `image/${exportFormat}`;
-    const extension = exportFormat === 'png' ? '.png' : '.jpg';
+    // const extension = exportFormat === 'png' ? '.png' : '.jpg'; // Unused variable
 
     const intersects = (img: CanvasImage) => {
       const imgRight = img.x + img.width * img.scale;
@@ -1468,7 +1498,7 @@ const App: React.FC = () => {
 
       const newImage: CanvasImage = {
         id: `img-${Date.now()}-${Math.random()}`,
-        name: imageToCrop.name, // Preserving original name
+        name: imageToCrop.name,
         element,
         x: newImageOrigin.x,
         y: newImageOrigin.y,
@@ -2052,7 +2082,6 @@ const App: React.FC = () => {
 
   const viewportSize = useMemo(() => ({ width: windowSize.width, height: windowSize.height }), [windowSize]);
 
-  // FIX: Define missing functions and variables
   const createGroupFromSelection = useCallback(() => {
     if (selectedImageIds.length === 0) return;
     
@@ -2110,6 +2139,7 @@ const App: React.FC = () => {
         left: `${screenX}px`,
         top: `${screenY + screenHeight + 10}px`,
         zIndex: 20,
+        transform: 'translateX(-50%)' // Centering
     };
   }, [selectedAnnotations, images, canvasAnnotations, viewTransform]);
     
@@ -2161,7 +2191,6 @@ const App: React.FC = () => {
   
   const toggleGroupLabel = useCallback((groupId: string) => {
     const nextGroups = groups.map(g => g.id === groupId ? { ...g, showLabel: !g.showLabel } : g);
-    // This is UI state and should probably not create history, but we follow the pattern for now
     pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
