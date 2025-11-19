@@ -1,9 +1,8 @@
 
-
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
-import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal } from '../utils/canvasUtils';
+import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect } from '../utils/canvasUtils';
 import { rgbToHex } from '../utils/colorUtils';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
@@ -16,6 +15,7 @@ interface CanvasWrapperProps {
   selectedImageIds: string[];
   setSelectedImageId: (id: string | null, options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onSelectImages: (ids: string[], keepExisting: boolean) => void;
+  onBoxSelect: (imageIds: string[], annotationSelections: AnnotationSelection[], keepExisting: boolean) => void;
   cropArea: Rect | null;
   setCropArea: React.Dispatch<React.SetStateAction<Rect | null>>;
   aspectRatio: AspectRatio;
@@ -40,6 +40,7 @@ interface CanvasWrapperProps {
   onMoveSelectedImages: (delta: Point) => void;
   lastCanvasMousePosition: React.MutableRefObject<Point>;
   onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string; imageId: string }>) => void;
+  selectedLayerId: string | null;
 }
 
 type CropHandle = 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
@@ -91,6 +92,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   selectedImageIds,
   setSelectedImageId,
   onSelectImages,
+  onBoxSelect,
   cropArea,
   setCropArea,
   aspectRatio,
@@ -115,6 +117,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   onReparentImageAnnotationsToCanvas,
   updateMultipleAnnotationsForInteraction,
   selectedAnnotationObjects,
+  selectedLayerId,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -303,8 +306,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     const canvas = internalCanvasRef.current;
     const ctx = contextRef.current;
     if (!canvas || !ctx) return;
-    drawCanvas(ctx, canvas, images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId);
-  }, [images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId]);
+    drawCanvas(ctx, canvas, images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId);
+  }, [images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -881,7 +884,15 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     }
 
     if (interaction?.mode === 'marquee-select' && marqueeRect) {
-        if (marqueeRect.width > 5 || marqueeRect.height > 5) {
+        // Normalize rect to always have positive width/height for intersection check
+        const normalizedMarquee = {
+            x: marqueeRect.width < 0 ? marqueeRect.x + marqueeRect.width : marqueeRect.x,
+            y: marqueeRect.height < 0 ? marqueeRect.y + marqueeRect.height : marqueeRect.y,
+            width: Math.abs(marqueeRect.width),
+            height: Math.abs(marqueeRect.height),
+        };
+
+        if (normalizedMarquee.width > 5 || normalizedMarquee.height > 5) {
             const selectedIds = images.filter(img => {
                  const imgRect = {
                     x: img.x,
@@ -889,12 +900,53 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
                     width: img.width * img.scale,
                     height: img.height * img.scale
                  };
-                 return marqueeRect.x < imgRect.x + imgRect.width &&
-                        marqueeRect.x + marqueeRect.width > imgRect.x &&
-                        marqueeRect.y < imgRect.y + imgRect.height &&
-                        marqueeRect.y + marqueeRect.height > imgRect.y;
+                 return rectIntersect(imgRect, normalizedMarquee);
             }).map(img => img.id);
-            onSelectImages(selectedIds, e.shiftKey || e.metaKey || e.ctrlKey);
+            
+            const selectedAnnos: AnnotationSelection[] = [];
+            const ctx = contextRef.current;
+
+            if (ctx) {
+                // Check canvas annotations
+                canvasAnnotations.forEach(anno => {
+                    const bounds = getAnnotationBounds(anno, ctx);
+                    if (rectIntersect(bounds, normalizedMarquee)) {
+                        selectedAnnos.push({ imageId: null, annotationId: anno.id });
+                    }
+                });
+
+                // Check image annotations
+                images.forEach(img => {
+                    img.annotations.forEach(anno => {
+                        const localBounds = getAnnotationBounds(anno, ctx, { ignoreStyles: true });
+                        
+                        // Transform bounds corners to global space to check intersection
+                        const corners = [
+                            { x: localBounds.x, y: localBounds.y },
+                            { x: localBounds.x + localBounds.width, y: localBounds.y },
+                            { x: localBounds.x + localBounds.width, y: localBounds.y + localBounds.height },
+                            { x: localBounds.x, y: localBounds.y + localBounds.height }
+                        ];
+                        
+                        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                        corners.forEach(corner => {
+                            const globalPoint = transformLocalToGlobal(corner, img);
+                            minX = Math.min(minX, globalPoint.x);
+                            minY = Math.min(minY, globalPoint.y);
+                            maxX = Math.max(maxX, globalPoint.x);
+                            maxY = Math.max(maxY, globalPoint.y);
+                        });
+                        
+                        const globalBounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+
+                        if (rectIntersect(globalBounds, normalizedMarquee)) {
+                            selectedAnnos.push({ imageId: img.id, annotationId: anno.id });
+                        }
+                    });
+                });
+            }
+
+            onBoxSelect(selectedIds, selectedAnnos, e.shiftKey || e.metaKey || e.ctrlKey);
         } else {
             if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
                 onSelectImages([], false);
@@ -947,7 +999,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
 
     setInteraction(null);
     setDropTargetImageId(null);
-  }, [interaction, getCanvasPoint, addAnnotation, drawingAnnotation, marqueeRect, images, onSelectImages, cropArea, setCropArea, onInteractionEnd, setDrawingAnnotation, setMarqueeRect, addCanvasAnnotation, dropTargetImageId, onReparentCanvasAnnotationsToImage, reparentImageAnnotationsToImage, selectedAnnotations, getLocalPoint, onReparentImageAnnotationsToCanvas]);
+  }, [interaction, getCanvasPoint, addAnnotation, drawingAnnotation, marqueeRect, images, onSelectImages, cropArea, setCropArea, onInteractionEnd, setDrawingAnnotation, setMarqueeRect, addCanvasAnnotation, dropTargetImageId, onReparentCanvasAnnotationsToImage, reparentImageAnnotationsToImage, selectedAnnotations, getLocalPoint, onReparentImageAnnotationsToCanvas, onBoxSelect, canvasAnnotations]);
 
   useEffect(() => {
     if (interaction) {

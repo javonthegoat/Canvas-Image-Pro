@@ -1,13 +1,12 @@
-
-
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { LeftSidebar } from './components/LeftSidebar';
 import { LayersPanel } from './components/LayersPanel';
 import { CanvasWrapper } from './components/CanvasWrapper';
 import { FloatingAnnotationEditor } from './components/FloatingAnnotationEditor';
+import { MiniMap } from './components/MiniMap';
 import { CanvasImage, Rect, AspectRatio, Annotation, AnnotationTool, Point, TextAnnotation, Group } from './types';
 import { readImageFile, downloadDataUrl, createImageElementFromDataUrl } from './utils/fileUtils';
-import { drawAnnotation, getAnnotationBounds, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds, getGroupBounds } from './utils/canvasUtils';
+import { drawAnnotation, getAnnotationBounds, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds, getGroupBounds, getMultiAnnotationBounds } from './utils/canvasUtils';
 
 declare var JSZip: any;
 
@@ -65,74 +64,25 @@ const trimCanvas = (canvas: HTMLCanvasElement): { canvas: HTMLCanvasElement; bou
   return { canvas: trimmedCanvas, bounds: { x: minX, y: minY, width: trimmedWidth, height: trimmedHeight } };
 };
 
-const arrangeImagesInGrid = (
-    images: CanvasImage[], 
-    direction: 'horizontal' | 'vertical',
-    startX: number,
-    startY: number
-): { [id: string]: { x: number; y: number } } => {
-    if (images.length === 0) return {};
+interface GridItem {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
-    const SPACING = 10;
-    const newPositions: { [id: string]: { x: number; y: number } } = {};
-    const n = images.length;
-    
-    let currentX = startX;
-    let currentY = startY;
-
-    if (direction === 'horizontal') {
-        const cols = Math.ceil(Math.sqrt(n));
-        let rowMaxHeight = 0;
-
-        for (let i = 0; i < n; i++) {
-            const image = images[i];
-            const colIndex = i % cols;
-
-            if (i > 0 && colIndex === 0) { // New row
-                currentY += rowMaxHeight + SPACING;
-                currentX = startX;
-                rowMaxHeight = 0;
-            }
-            
-            newPositions[image.id] = { x: currentX, y: currentY };
-            
-            currentX += image.width * image.scale + SPACING;
-            rowMaxHeight = Math.max(rowMaxHeight, image.height * image.scale);
-        }
-    } else { // vertical
-        const rows = Math.ceil(Math.sqrt(n));
-        let colMaxWidth = 0;
-
-        for (let i = 0; i < n; i++) {
-            const image = images[i];
-            const rowIndex = i % rows;
-
-            if (i > 0 && rowIndex === 0) { // New column
-                currentX += colMaxWidth + SPACING;
-                currentY = startY;
-                colMaxWidth = 0;
-            }
-
-            newPositions[image.id] = { x: currentX, y: currentY };
-            
-            currentY += image.height * image.scale + SPACING;
-            colMaxWidth = Math.max(colMaxWidth, image.width * image.scale);
-        }
-    }
-    return newPositions;
-};
-
-const arrangeRectsInGrid = (
-    rects: (Rect & { id: string })[], 
+const arrangeItemsInGrid = (
+    items: GridItem[], 
     direction: 'horizontal' | 'vertical',
     startX: number,
     startY: number,
-    spacing: number
+    spacing: number = 10
 ): { [id: string]: { x: number; y: number } } => {
-    if (rects.length === 0) return {};
+    if (items.length === 0) return {};
 
     const newPositions: { [id: string]: { x: number; y: number } } = {};
-    const n = rects.length;
+    const n = items.length;
     
     let currentX = startX;
     let currentY = startY;
@@ -142,7 +92,7 @@ const arrangeRectsInGrid = (
         let rowMaxHeight = 0;
 
         for (let i = 0; i < n; i++) {
-            const rect = rects[i];
+            const item = items[i];
             const colIndex = i % cols;
 
             if (i > 0 && colIndex === 0) { // New row
@@ -151,17 +101,17 @@ const arrangeRectsInGrid = (
                 rowMaxHeight = 0;
             }
             
-            newPositions[rect.id] = { x: currentX, y: currentY };
+            newPositions[item.id] = { x: currentX, y: currentY };
             
-            currentX += rect.width + spacing;
-            rowMaxHeight = Math.max(rowMaxHeight, rect.height);
+            currentX += item.width + spacing;
+            rowMaxHeight = Math.max(rowMaxHeight, item.height);
         }
     } else { // vertical
         const rows = Math.ceil(Math.sqrt(n));
         let colMaxWidth = 0;
 
         for (let i = 0; i < n; i++) {
-            const rect = rects[i];
+            const item = items[i];
             const rowIndex = i % rows;
 
             if (i > 0 && rowIndex === 0) { // New column
@@ -170,15 +120,14 @@ const arrangeRectsInGrid = (
                 colMaxWidth = 0;
             }
 
-            newPositions[rect.id] = { x: currentX, y: currentY };
+            newPositions[item.id] = { x: currentX, y: currentY };
             
-            currentY += rect.height + spacing;
-            colMaxWidth = Math.max(colMaxWidth, rect.width);
+            currentY += item.height + spacing;
+            colMaxWidth = Math.max(colMaxWidth, item.width);
         }
     }
     return newPositions;
 };
-
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
 type LastArrangement = { type: 'arrange' | 'stack'; direction: 'horizontal' | 'vertical'; } | null;
@@ -288,6 +237,7 @@ const App: React.FC = () => {
   const [clipboard, setClipboard] = useState<{ selections: AnnotationSelection[] } | null>(null);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const floatingEditorRef = useRef<HTMLDivElement>(null);
   const lastCanvasMousePosition = useRef<Point>({ x: 0, y: 0 });
 
@@ -635,8 +585,8 @@ const App: React.FC = () => {
                 break;
         }
         
-        newAnnotation.scale /= targetImage.scale;
-        newAnnotation.rotation -= targetImage.rotation;
+        newAnnotation.scale = Number(newAnnotation.scale) / Number(targetImage.scale);
+        newAnnotation.rotation = Number(newAnnotation.rotation) - Number(targetImage.rotation);
         
         newAnnotationsForImage.push(newAnnotation);
         newSelection.push({ imageId: newImageId, annotationId: newAnnotation.id });
@@ -674,8 +624,8 @@ const App: React.FC = () => {
         const newAnnotation = JSON.parse(JSON.stringify(annotationToMove)) as Annotation;
         const transformPoint = (p: Point): Point => transformLocalToGlobal(p, sourceImage);
 
-        newAnnotation.scale = sourceImage.scale * newAnnotation.scale;
-        newAnnotation.rotation = sourceImage.rotation + newAnnotation.rotation;
+        newAnnotation.scale = Number(sourceImage.scale) * Number(newAnnotation.scale);
+        newAnnotation.rotation = Number(sourceImage.rotation) + Number(newAnnotation.rotation);
 
         switch (newAnnotation.type) {
             case 'rect': case 'text': case 'circle':
@@ -734,9 +684,16 @@ const App: React.FC = () => {
             const globalP = transformLocalToGlobal(p, oldImage);
             return transformGlobalToLocal(globalP, newImage);
         };
-        // Cast properties to Number and add fallbacks to prevent arithmetic errors on potentially non-numeric types from deserialized data.
-        newAnnotation.scale = (Number((oldImage.scale || 1) as any) * Number((newAnnotation.scale || 1) as any)) / Number((newImage.scale || 1) as any);
-        newAnnotation.rotation = (Number((oldImage.rotation || 0) as any) + Number((newAnnotation.rotation || 0) as any)) - Number((newImage.rotation || 0) as any);
+
+        const oldScale: number = Number(oldImage.scale || 1);
+        const annoScale: number = Number(newAnnotation.scale || 1);
+        const newImgScale: number = Number(newImage.scale || 1);
+        newAnnotation.scale = (oldScale * annoScale) / newImgScale;
+        
+        const oldRot: number = Number(oldImage.rotation || 0);
+        const annoRot: number = Number(newAnnotation.rotation || 0);
+        const newImgRot: number = Number(newImage.rotation || 0);
+        newAnnotation.rotation = (oldRot + annoRot) - newImgRot;
 
         switch (newAnnotation.type) {
             case 'rect': case 'text': case 'circle':
@@ -1084,6 +1041,35 @@ const App: React.FC = () => {
     });
   }, []);
 
+  const handleBoxSelect = useCallback((imageIds: string[], annotationSelections: AnnotationSelection[], keepExisting = false) => {
+        setAppState(prev => {
+            let newImageSelection: string[];
+            let newAnnotationSelection: AnnotationSelection[];
+
+            if (keepExisting) {
+                const existingImageSet = new Set(prev.selectedImageIds);
+                const newImgIds = imageIds.filter(id => !existingImageSet.has(id));
+                newImageSelection = [...prev.selectedImageIds, ...newImgIds];
+                
+                // For annotations, basic dedupe by annotationId
+                const existingAnnoIds = new Set(prev.selectedAnnotations.map(s => s.annotationId));
+                const newAnnos = annotationSelections.filter(s => !existingAnnoIds.has(s.annotationId));
+                newAnnotationSelection = [...prev.selectedAnnotations, ...newAnnos];
+            } else {
+                newImageSelection = imageIds;
+                newAnnotationSelection = annotationSelections;
+            }
+            
+            return {
+                ...prev,
+                selectedImageIds: newImageSelection,
+                selectedAnnotations: newAnnotationSelection,
+                selectedLayerId: null,
+                selectionMethod: 'box'
+            };
+        });
+    }, []);
+
   const handleSelectAnnotation = useCallback((imageId: string | null, annotationId: string, options: { shiftKey: boolean; ctrlKey: boolean }) => {
     setAppState(prev => {
         let newSelectedAnnotations: AnnotationSelection[] = [];
@@ -1169,47 +1155,107 @@ const App: React.FC = () => {
   const arrangeImages = useCallback((direction: 'horizontal' | 'vertical') => {
     if (selectedImageIds.length === 0) return;
 
+    // Identify top-level entities (Groups or Images)
+    const selectedIdsSet = new Set(selectedImageIds);
+    const processedImageIds = new Set<string>();
+    const arrangeableItems: { type: 'group' | 'image', data: Group | CanvasImage, bounds: Rect }[] = [];
+
+    // 1. Find fully selected groups
+    const fullySelectedGroups = groups.filter(g => {
+         const gIds = getAllImageIdsInGroup(g.id, groups);
+         return gIds.length > 0 && gIds.every(id => selectedIdsSet.has(id));
+    });
+
+    // 2. Filter to top-most fully selected groups
+    const topLevelGroups = fullySelectedGroups.filter(g => {
+        // A group is top-level if none of its parents are in fullySelectedGroups
+        let curr = g;
+        while (curr.parentId) {
+             if (fullySelectedGroups.some(p => p.id === curr.parentId)) return false;
+             const p = groups.find(x => x.id === curr.parentId);
+             if (!p) break;
+             curr = p;
+        }
+        return true;
+    });
+
+    // 3. Add groups to items
+    topLevelGroups.forEach(g => {
+        const gIds = getAllImageIdsInGroup(g.id, groups);
+        gIds.forEach(id => processedImageIds.add(id));
+        const bounds = getGroupBounds(g, groups, images);
+        if (bounds) {
+            arrangeableItems.push({ type: 'group', data: g, bounds });
+        }
+    });
+
+    // 4. Add remaining independent images
+    selectedImageIds.forEach(id => {
+        if (!processedImageIds.has(id)) {
+            const img = images.find(i => i.id === id);
+            if (img) {
+                 arrangeableItems.push({ 
+                     type: 'image', 
+                     data: img, 
+                     bounds: { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale }
+                 });
+            }
+        }
+    });
+
+    if (arrangeableItems.length === 0) return;
+
+    // Sort items to maintain some order (e.g. top-left to bottom-right)
+    arrangeableItems.sort((a, b) => {
+        // Sort by Y primarily, then X
+        if (Math.abs(a.bounds.y - b.bounds.y) > 50) return a.bounds.y - b.bounds.y;
+        return a.bounds.x - b.bounds.x;
+    });
+
     const currentArrangement = { type: 'arrange' as const, direction };
     const isSameAsLast = lastArrangement?.type === 'arrange' && lastArrangement?.direction === direction;
-
-    let selectedImagesInOrder = selectedImageIds
-        .map(id => images.find(img => img.id === id))
-        .filter((img): img is CanvasImage => !!img);
-
-    if (selectedImagesInOrder.length === 0) {
-      return;
-    }
-
-    const imageIndexMap = new Map(images.map((img, i) => [img.id, i]));
-    selectedImagesInOrder.sort((a, b) => (imageIndexMap.get(a.id) ?? 0) - (imageIndexMap.get(b.id) ?? 0));
-
     if (isSameAsLast) {
-        selectedImagesInOrder.reverse();
-    }
-    
-    const selectionBounds = getImagesBounds(selectedImagesInOrder);
-    if (!selectionBounds) return;
-    
-    const newPositions = arrangeImagesInGrid(selectedImagesInOrder, direction, 0, 0);
-
-    const virtualImages = selectedImagesInOrder.map(img => ({ ...img, ...newPositions[img.id] }));
-    const newLayoutBounds = getImagesBounds(virtualImages);
-    if (!newLayoutBounds) return;
-
-    const finalDx = selectionBounds.x - newLayoutBounds.x;
-    const finalDy = selectionBounds.y - newLayoutBounds.y;
-
-    for (const id in newPositions) {
-        newPositions[id].x += finalDx;
-        newPositions[id].y += finalDy;
+        arrangeableItems.reverse();
     }
 
-    const newImages = images.map(img =>
-        newPositions[img.id] ? { ...img, ...newPositions[img.id] } : img
-    );
+    // Prepare for grid
+    const gridInput = arrangeableItems.map(item => ({
+        id: item.data.id,
+        x: item.bounds.x,
+        y: item.bounds.y,
+        width: item.bounds.width,
+        height: item.bounds.height
+    }));
+
+    // Calculate anchor position (top-left of selection)
+    const minX = Math.min(...gridInput.map(i => i.x));
+    const minY = Math.min(...gridInput.map(i => i.y));
+
+    // Run Layout with increased spacing
+    const newPositions = arrangeItemsInGrid(gridInput, direction, minX, minY, 50);
+
+    // Apply updates
+    let newImages = [...images];
     
+    arrangeableItems.forEach(item => {
+        const newPos = newPositions[item.data.id];
+        if (!newPos) return;
+        
+        const dx = newPos.x - item.bounds.x;
+        const dy = newPos.y - item.bounds.y;
+
+        if (item.type === 'image') {
+             newImages = newImages.map(img => img.id === item.data.id ? { ...img, x: newPos.x, y: newPos.y } : img);
+        } else {
+             // Move all images in group by dx, dy
+             const gIds = new Set(getAllImageIdsInGroup((item.data as Group).id, groups));
+             newImages = newImages.map(img => gIds.has(img.id) ? { ...img, x: img.x + dx, y: img.y + dy } : img);
+        }
+    });
+
     pushHistory({ images: newImages, groups, canvasAnnotations });
     setLastArrangement(isSameAsLast ? null : currentArrangement);
+
   }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations, lastArrangement]);
 
   const stackImages = useCallback((direction: 'horizontal' | 'vertical') => {
@@ -1362,8 +1408,6 @@ const App: React.FC = () => {
 
       const dataUrl = trimmedCanvas.toDataURL(mimeType);
       const element = await createImageElementFromDataUrl(dataUrl);
-
-      const baseName = imageToCrop.name.replace(/\.[^/.]+$/, "");
       
       const newImageOrigin = {
         x: cropArea.x + (trimBounds.x / dpr),
@@ -1424,7 +1468,7 @@ const App: React.FC = () => {
 
       const newImage: CanvasImage = {
         id: `img-${Date.now()}-${Math.random()}`,
-        name: `${baseName}_crop${extension}`,
+        name: imageToCrop.name, // Preserving original name
         element,
         x: newImageOrigin.x,
         y: newImageOrigin.y,
@@ -1511,10 +1555,10 @@ const App: React.FC = () => {
     if (cropArea) {
         areaToCopy = cropArea;
         const intersects = (img: CanvasImage) => {
-            const imgRight = img.x + img.width * img.scale;
-            const imgBottom = img.y + img.height * img.scale;
-            const cropRight = areaToCopy!.x + areaToCopy!.width;
-            const cropBottom = areaToCopy!.y + areaToCopy!.height;
+            const imgRight = Number(img.x) + Number(img.width) * Number(img.scale);
+            const imgBottom = Number(img.y) + Number(img.height) * Number(img.scale);
+            const cropRight = Number(areaToCopy!.x) + Number(areaToCopy!.width);
+            const cropBottom = Number(areaToCopy!.y) + Number(areaToCopy!.height);
             return !(areaToCopy!.x > imgRight || cropRight < img.x || areaToCopy!.y > imgBottom || cropBottom < img.y);
         };
         imagesToComposite = images.filter(intersects);
@@ -1847,10 +1891,27 @@ const App: React.FC = () => {
 
           type SerializedImage = Omit<CanvasImage, 'element'> & { dataUrl: string };
 
-          const deserializeImageData = async (data: SerializedImage): Promise<CanvasImage> => {
+          const deserializeImageData = async (data: any): Promise<CanvasImage> => {
               const element = await createImageElementFromDataUrl(data.dataUrl);
               const { dataUrl, ...rest } = data;
-              return { ...rest, annotations: data.annotations || [], tags: Array.isArray(data.tags) ? data.tags : [], createdAt: new Date(rest.createdAt), element };
+              
+              return { 
+                  ...rest, 
+                  x: Number(data.x ?? 0),
+                  y: Number(data.y ?? 0),
+                  width: Number(data.width ?? 0),
+                  height: Number(data.height ?? 0),
+                  scale: Number(data.scale ?? 1),
+                  rotation: Number(data.rotation ?? 0),
+                  originalWidth: Number(data.originalWidth ?? data.width ?? 0),
+                  originalHeight: Number(data.originalHeight ?? data.height ?? 0),
+                  outlineWidth: Number(data.outlineWidth ?? 0),
+                  outlineOpacity: Number(data.outlineOpacity ?? 1),
+                  annotations: data.annotations || [], 
+                  tags: Array.isArray(data.tags) ? data.tags.filter((t: any) => t != null).map(String) : [], 
+                  createdAt: new Date(data.createdAt), 
+                  element 
+              };
           };
           
           const deserializeArchived = async (archivedData: Record<string, SerializedImage>) => {
@@ -1870,13 +1931,13 @@ const App: React.FC = () => {
           ]);
           
           const imageIdSet = new Set(newImages.map(img => img.id));
-          const groupIdSet = new Set(
-            Array.isArray(loadedGroups)
+          const loadedGroupIds = Array.isArray(loadedGroups)
               ? loadedGroups
                   .map((g: any) => g?.id)
                   .filter((id: any): id is string => typeof id === 'string')
-              : []
-          );
+              : [];
+          const groupIdSet = new Set<string>(loadedGroupIds);
+
           const sanitizedGroups: Group[] = Array.isArray(loadedGroups) ? loadedGroups.map((g: any): Group | null => {
             if (typeof g !== 'object' || g === null) return null;
             return {
@@ -1884,9 +1945,8 @@ const App: React.FC = () => {
               name: typeof g.name === 'string' ? g.name : 'Untitled Group',
               label: typeof g.label === 'string' ? g.label : (g.name || 'Untitled Group'),
               showLabel: typeof g.showLabel === 'boolean' ? g.showLabel : true,
-              // Ensure properties from deserialized data are of the correct type and valid.
-              imageIds: Array.isArray(g.imageIds) ? g.imageIds.filter((id: unknown): id is string => typeof id === 'string' && imageIdSet.has(id as string)) : [],
-              groupIds: Array.isArray(g.groupIds) ? g.groupIds.filter((id: unknown): id is string => typeof id === 'string' && groupIdSet.has(id as string)) : [],
+              imageIds: Array.isArray(g.imageIds) ? (g.imageIds as any[]).filter((id: any): id is string => typeof id === 'string' && imageIdSet.has(id)) : [],
+              groupIds: Array.isArray(g.groupIds) ? (g.groupIds as any[]).filter((id: any): id is string => typeof id === 'string' && groupIdSet.has(id)) : [],
               isExpanded: typeof g.isExpanded === 'boolean' ? g.isExpanded : true,
               parentId: typeof g.parentId === 'string' && groupIdSet.has(g.parentId) ? g.parentId : null,
             };
@@ -1922,418 +1982,6 @@ const App: React.FC = () => {
       }
   }, [isDirty]);
 
-  const handleCopy = useCallback(() => {
-    if (selectedAnnotations.length > 0) {
-      setClipboard({ selections: [...selectedAnnotations] });
-    }
-  }, [selectedAnnotations]);
-
-  const handlePaste = useCallback(() => {
-    if (!clipboard) return;
-
-    const { selections } = clipboard;
-    if (selections.length === 0) return;
-
-    const newAnnotations: Annotation[] = [];
-    const newSelections: AnnotationSelection[] = [];
-
-    const getLocalPoint = (canvasPoint: Point, image: CanvasImage): Point | null => {
-        const centerX = image.x + image.width * image.scale / 2;
-        const centerY = image.y + image.height * image.scale / 2;
-        const dx = canvasPoint.x - centerX;
-        const dy = canvasPoint.y - centerY;
-        const rad = -image.rotation * Math.PI / 180;
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-        const rotatedDx = dx * cos - dy * sin;
-        const rotatedDy = dx * sin + dy * cos;
-        const localX = (rotatedDx / image.scale) + image.width / 2;
-        const localY = (rotatedDy / image.scale) + image.height / 2;
-        if(localX >= 0 && localX <= image.width && localY >= 0 && localY <= image.height) {
-          return { x: localX, y: localY };
-        }
-        return null;
-    };
-    
-    const targetImage = [...images].reverse().find(img => getLocalPoint(lastCanvasMousePosition.current, img) !== null);
-    const OFFSET = 10 / viewTransform.scale;
-
-    for (const selection of selections) {
-        const originalAnnotation = selection.imageId
-            ? images.find(i => i.id === selection.imageId)?.annotations.find(a => a.id === selection.annotationId)
-            : canvasAnnotations.find(a => a.id === selection.annotationId);
-        
-        if (!originalAnnotation) continue;
-
-        const newId = `anno-${Date.now()}-${Math.random()}`;
-        const newAnnotation = JSON.parse(JSON.stringify(originalAnnotation)) as Annotation;
-        newAnnotation.id = newId;
-
-        const sourceImage: CanvasImage | null = selection.imageId ? images.find(i => i.id === selection.imageId) || null : null;
-
-        const transformPoint = (p: Point): Point => {
-            const globalPoint = sourceImage ? transformLocalToGlobal(p, sourceImage) : p;
-            const targetPoint = targetImage ? transformGlobalToLocal(globalPoint, targetImage) : globalPoint;
-            return { x: targetPoint.x + OFFSET, y: targetPoint.y + OFFSET };
-        };
-
-        switch (newAnnotation.type) {
-            case 'rect': case 'text': case 'circle':
-                const { x, y } = transformPoint({ x: newAnnotation.x, y: newAnnotation.y });
-                newAnnotation.x = x;
-                newAnnotation.y = y;
-                break;
-            case 'freehand':
-                newAnnotation.points = newAnnotation.points.map(transformPoint);
-                break;
-            case 'arrow': case 'line':
-                newAnnotation.start = transformPoint(newAnnotation.start);
-                newAnnotation.end = transformPoint(newAnnotation.end);
-                break;
-        }
-
-        const sourceRotation = sourceImage?.rotation ?? 0;
-        const sourceScale = sourceImage?.scale ?? 1;
-        const targetRotation = targetImage?.rotation ?? 0;
-        const targetScale = targetImage?.scale ?? 1;
-
-        // Cast properties to Number to prevent arithmetic errors on potentially non-numeric types from deserialized data.
-        newAnnotation.rotation = (Number(sourceRotation as any) + Number((newAnnotation.rotation || 0) as any)) - Number(targetRotation as any);
-        newAnnotation.scale = (Number(sourceScale as any) * Number((newAnnotation.scale || 1) as any)) / Number(targetScale as any);
-
-        newAnnotations.push(newAnnotation);
-        newSelections.push({ imageId: targetImage?.id ?? null, annotationId: newId });
-    }
-
-    if (newAnnotations.length === 0) return;
-
-    if (targetImage) {
-        const nextImages = images.map(img => {
-            if (img.id === targetImage.id) {
-                return { ...img, annotations: [...img.annotations, ...newAnnotations] };
-            }
-            return img;
-        });
-        pushHistory({ images: nextImages, groups, canvasAnnotations });
-    } else {
-        pushHistory({ images, groups, canvasAnnotations: [...canvasAnnotations, ...newAnnotations] });
-    }
-    
-    setAppState(prev => ({ ...prev, selectedAnnotations: newSelections, selectedImageIds: [] }));
-
-}, [clipboard, images, groups, canvasAnnotations, pushHistory, viewTransform.scale]);
-
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-        if (isDirty) {
-            e.preventDefault();
-            e.returnValue = ''; // Required for Chrome.
-        }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-        window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [isDirty]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isEditingText = target.tagName.toUpperCase() === 'INPUT' || target.tagName.toUpperCase() === 'TEXTAREA' || target.isContentEditable;
-      
-      if (e.key.toLowerCase() === 's' && !isEditingText) {
-        e.preventDefault();
-        setActiveTool('select');
-      }
-
-      if (e.key.toLowerCase() === 'i' && !isEditingText) {
-        e.preventDefault();
-        setActiveTool('eyedropper');
-      }
-
-      if (e.ctrlKey || e.metaKey) {
-          if (e.key.toLowerCase() === 'z') {
-              e.preventDefault();
-              handleUndo();
-          } else if (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')) {
-              e.preventDefault();
-              handleRedo();
-          } else if (e.key.toLowerCase() === 'c' && !isEditingText) {
-              e.preventDefault();
-              if (selectedAnnotations.length > 0) {
-                  handleCopy();
-              } else if (cropArea || selectedImageIds.length > 0) {
-                  handleCopyToClipboard();
-              }
-          } else if (e.key.toLowerCase() === 'v' && !isEditingText) {
-            if (clipboard) {
-              e.preventDefault();
-              handlePaste();
-            }
-          }
-          return;
-      }
-      
-      if (!isEditingText && e.key === 'Enter' && cropArea) {
-        e.preventDefault();
-        handleCrop();
-      }
-
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !isEditingText) {
-        if (selectedImageIds.length > 0) {
-          e.preventDefault();
-          deleteSelectedImages();
-        } else if (selectedAnnotations.length > 0) {
-          e.preventDefault();
-          deleteSelectedAnnotations();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [selectedImageIds, deleteSelectedImages, handleUndo, handleRedo, selectedAnnotations, deleteSelectedAnnotations, cropArea, handleCopyToClipboard, setActiveTool, handleCrop, handleCopy, handlePaste, clipboard]);
-
-  useEffect(() => {
-    const handlePaste = async (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      let isPastingImage = false;
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          isPastingImage = true;
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            try {
-              const newImage = await readImageFile(file);
-              
-              const canvas = canvasRef.current;
-              if (canvas) {
-                const { width, height } = canvas.getBoundingClientRect();
-                const centerX = (width / 2 - viewTransform.offset.x) / viewTransform.scale - (newImage.width * newImage.scale / 2);
-                const centerY = (height / 2 - viewTransform.offset.y) / viewTransform.scale - (newImage.height * newImage.scale / 2);
-                newImage.x = centerX;
-                newImage.y = centerY;
-              }
-
-              pushHistory({ images: [...images, newImage], groups, canvasAnnotations });
-              handleSelectLayer(newImage.id, 'image', { shiftKey: false, ctrlKey: false });
-            } catch (error) {
-              console.error("Error reading pasted image:", error);
-            }
-          }
-        }
-      }
-    };
-
-    window.addEventListener('paste', handlePaste);
-    return () => {
-      window.removeEventListener('paste', handlePaste);
-    };
-  }, [pushHistory, images, groups, canvasAnnotations, viewTransform, handleSelectLayer]);
-  
-  const selectedAnnotationObjects = useMemo(() => {
-    const annotations: Annotation[] = [];
-    for (const sel of selectedAnnotations) {
-        if (sel.imageId) {
-            const image = images.find(img => img.id === sel.imageId);
-            const annotation = image?.annotations.find(anno => anno.id === sel.annotationId);
-            if (annotation) {
-                annotations.push(annotation);
-            }
-        } else { // Canvas annotation
-            const annotation = canvasAnnotations.find(anno => anno.id === sel.annotationId);
-            if (annotation) {
-                annotations.push(annotation);
-            }
-        }
-    }
-    return annotations;
-  }, [selectedAnnotations, images, canvasAnnotations]);
-  
-  const floatingEditorPosition = useMemo((): React.CSSProperties => {
-    if (selectedAnnotations.length === 0) return { display: 'none' };
-    
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    
-    const canvas = canvasRef.current;
-    const tempCtx = canvas?.getContext('2d');
-    if (!canvas || !tempCtx) return { display: 'none' };
-
-    selectedAnnotations.forEach(sel => {
-        const image = sel.imageId ? images.find(img => img.id === sel.imageId) : null;
-        const annotation = image
-            ? image.annotations.find(a => a.id === sel.annotationId)
-            : canvasAnnotations.find(a => a.id === sel.annotationId);
-        
-        if (!annotation) return;
-
-        const localBounds = getAnnotationBounds(annotation, tempCtx, { ignoreStyles: true });
-        const corners = [
-            { x: localBounds.x, y: localBounds.y },
-            { x: localBounds.x + localBounds.width, y: localBounds.y },
-            { x: localBounds.x + localBounds.width, y: localBounds.y + localBounds.height },
-            { x: localBounds.x, y: localBounds.y + localBounds.height },
-        ];
-
-        if (image) { // It's an image annotation
-            corners.forEach(corner => {
-                const globalPoint = transformLocalToGlobal(corner, image);
-                minX = Math.min(minX, globalPoint.x);
-                minY = Math.min(minY, globalPoint.y);
-                maxX = Math.max(maxX, globalPoint.x);
-                maxY = Math.max(maxY, globalPoint.y);
-            });
-        } else { // It's a canvas annotation
-            corners.forEach(corner => {
-                minX = Math.min(minX, corner.x);
-                minY = Math.min(minY, corner.y);
-                maxX = Math.max(maxX, corner.x);
-                maxY = Math.max(maxY, corner.y);
-            });
-        }
-    });
-
-    if (minX === Infinity) return { display: 'none' };
-    
-    const minScreenX = (minX * viewTransform.scale) + viewTransform.offset.x;
-    const maxScreenX = (maxX * viewTransform.scale) + viewTransform.offset.x;
-    const maxScreenY = (maxY * viewTransform.scale) + viewTransform.offset.y;
-
-    const PADDING = 25;
-    
-    const centerScreenX = minScreenX + (maxScreenX - minScreenX) / 2;
-
-    return {
-        display: 'block',
-        position: 'absolute',
-        left: `${centerScreenX}px`,
-        top: `${maxScreenY + PADDING}px`,
-        transform: 'translateX(-50%)',
-    };
-  }, [selectedAnnotations, images, canvasAnnotations, viewTransform]);
-
-  const createGroupFromSelection = useCallback(() => {
-    if (selectedImageIds.length < 1) return;
-    
-    const newName = `Group ${groups.length + 1}`;
-    const newGroup: Group = {
-        id: `group-${Date.now()}`,
-        name: newName,
-        label: newName,
-        showLabel: true,
-        imageIds: selectedImageIds,
-        groupIds: [],
-        isExpanded: true,
-        parentId: null,
-    };
-    const updatedGroups = groups.map(g => ({
-        ...g,
-        imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)),
-    })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
-    
-    pushHistory({ images, groups: [...updatedGroups, newGroup], canvasAnnotations });
-    
-    setAppState(prev => ({
-        ...prev,
-        selectedImageIds: [],
-        selectedLayerId: null,
-    }));
-  }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations]);
-
-  const deleteGroup = useCallback((groupId: string) => {
-    const groupToDelete = groups.find(g => g.id === groupId);
-    if (!groupToDelete) return;
-
-    let nextGroups = [...groups];
-
-    // Reparent children to the deleted group's parent
-    const newParentId = groupToDelete.parentId;
-
-    // Reparent child groups
-    nextGroups = nextGroups.map(g => 
-        groupToDelete.groupIds.includes(g.id) ? { ...g, parentId: newParentId } : g
-    );
-
-    // Add children to the new parent's lists (if it exists)
-    if (newParentId) {
-        nextGroups = nextGroups.map(g => {
-            if (g.id === newParentId) {
-                return {
-                    ...g,
-                    imageIds: [...g.imageIds, ...groupToDelete.imageIds],
-                    groupIds: [...g.groupIds, ...groupToDelete.groupIds],
-                };
-            }
-            return g;
-        });
-    }
-
-    // Finally, filter out the deleted group
-    nextGroups = nextGroups.filter(g => g.id !== groupId);
-
-    pushHistory({ images, groups: nextGroups, canvasAnnotations });
-}, [pushHistory, images, groups, canvasAnnotations]);
-
-
-  const renameGroup = useCallback((groupId: string, newName: string) => {
-    const newGroups = groups.map(g => g.id === groupId ? { ...g, name: newName } : g);
-    pushHistory({ images: newGroups, groups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
-
-  const renameGroupLabel = useCallback((groupId: string, newLabel: string) => {
-    const newGroups = groups.map(g => g.id === groupId ? { ...g, label: newLabel } : g);
-    pushHistory({ images, groups: newGroups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
-
-  const toggleGroupLabel = useCallback((groupId: string) => {
-    const newGroups = groups.map(g => g.id === groupId ? { ...g, showLabel: !g.showLabel } : g);
-    pushHistory({ images, groups: newGroups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
-
-  const toggleGroupExpanded = useCallback((groupId: string) => {
-    setAppState(prev => {
-        const currentGroups = prev.history[prev.historyIndex].groups;
-        const newGroups = currentGroups.map(g => g.id === groupId ? { ...g, isExpanded: !g.isExpanded } : g);
-        const newHistory = [...prev.history];
-        newHistory[prev.historyIndex] = { ...newHistory[prev.historyIndex], groups: newGroups };
-        return { ...prev, history: newHistory };
-    });
-  }, []);
-
-  const toggleImageAnnotationsExpanded = useCallback((imageId: string) => {
-    setAppState(prev => {
-        const current = new Set(prev.expandedImageAnnotationIds);
-        if (current.has(imageId)) {
-            current.delete(imageId);
-        } else {
-            current.add(imageId);
-        }
-        return { ...prev, expandedImageAnnotationIds: Array.from(current) };
-    });
-  }, []);
-
-  const addImageToGroup = useCallback((groupId: string, imageId: string) => {
-    const imageToAdd = images.find(img => img.id === imageId);
-    if (!imageToAdd) return;
-
-    // Remove from all other groups
-    const groupsWithoutImage = groups.map(g => ({
-        ...g,
-        imageIds: g.imageIds.filter(id => id !== imageId)
-    }));
-
-    // Add to target group
-    const updatedGroups = groupsWithoutImage.map(g =>
-        g.id === groupId ? { ...g, imageIds: [...g.imageIds, imageId] } : g
-    );
-
-    pushHistory({ images, groups: updatedGroups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
-
   const reparentGroup = useCallback((childGroupId: string, newParentId: string | null) => {
     let nextGroups = [...groups];
     const childGroup = nextGroups.find(g => g.id === childGroupId);
@@ -2367,53 +2015,158 @@ const App: React.FC = () => {
     pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
-  const ungroupImages = useCallback((imageIdsToUngroup: string[]) => {
-    if (imageIdsToUngroup.length === 0) return;
-    const idsSet = new Set(imageIdsToUngroup);
+  const handleSetSelectedAnnotations = useCallback((updater: AnnotationSelection[] | ((prev: AnnotationSelection[]) => AnnotationSelection[])) => {
+        setAppState(prev => {
+            const newSelections = typeof updater === 'function' ? updater(prev.selectedAnnotations) : updater;
+            return { ...prev, selectedAnnotations: newSelections, selectedImageIds: [], selectedLayerId: null };
+        });
+  }, []);
 
-    const nextGroups = groups.map(g => {
-        const newImageIds = g.imageIds.filter(id => !idsSet.has(id));
-        return { ...g, imageIds: newImageIds };
-    }).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
-
-    pushHistory({ images, groups: nextGroups, canvasAnnotations });
-    setAppState(prev => ({ ...prev, selectedImageIds: imageIdsToUngroup, selectedLayerId: imageIdsToUngroup.length === 1 ? imageIdsToUngroup[0] : null }));
-  }, [pushHistory, images, groups, canvasAnnotations]);
-  
-  const parentImageIds = useMemo(() => new Set(selectedAnnotations.filter(sel => sel.imageId).map(sel => sel.imageId!)), [selectedAnnotations]);
+  const handleMoveCanvasAnnotations = useCallback((delta: Point) => {
+        setCanvasAnnotationsForInteraction(prev => prev.map(anno => {
+            if (selectedAnnotations.some(s => s.annotationId === anno.id)) {
+                 if (anno.type === 'freehand') {
+                     return { ...anno, points: anno.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y })) };
+                 } else if (anno.type === 'line' || anno.type === 'arrow') {
+                     return { ...anno, start: { x: anno.start.x + delta.x, y: anno.start.y + delta.y }, end: { x: anno.end.x + delta.x, y: anno.end.y + delta.y } };
+                 } else {
+                     // text, rect, circle
+                     return { ...anno, x: (anno as any).x + delta.x, y: (anno as any).y + delta.y };
+                 }
+            }
+            return anno;
+        }));
+  }, [selectedAnnotations, setCanvasAnnotationsForInteraction]);
 
   const handleReverseLayerOrder = useCallback(() => {
-    pushHistory({ images: [...images].reverse(), groups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations]);
-  
-  const handleAddTag = useCallback((imageId: string, tag: string) => {
-    const newImages = images.map(img => {
-      if (img.id === imageId) {
-        const newTags = [...(img.tags || [])];
-        if (!newTags.includes(tag)) {
-          newTags.push(tag);
+        pushHistory({ images: [...images].reverse(), groups, canvasAnnotations });
+  }, [images, groups, canvasAnnotations, pushHistory]);
+
+  // Resize handler for MiniMap
+  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+      const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const viewportSize = useMemo(() => ({ width: windowSize.width, height: windowSize.height }), [windowSize]);
+
+  // FIX: Define missing functions and variables
+  const createGroupFromSelection = useCallback(() => {
+    if (selectedImageIds.length === 0) return;
+    
+    const newGroup: Group = {
+        id: `group-${Date.now()}-${Math.random()}`,
+        name: 'New Group',
+        label: 'New Group',
+        showLabel: true,
+        imageIds: selectedImageIds,
+        groupIds: [],
+        isExpanded: true,
+        parentId: null,
+    };
+    
+    // Remove images from other groups if they are part of one
+    const nextGroups = groups.map(g => ({
+        ...g,
+        imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)),
+    })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
+
+    pushHistory({ images, groups: [...nextGroups, newGroup], canvasAnnotations });
+    setAppState(prev => ({ ...prev, selectedImageIds: [], selectedLayerId: newGroup.id }));
+  }, [selectedImageIds, images, groups, canvasAnnotations, pushHistory]);
+
+  const selectedAnnotationObjects = useMemo(() => {
+    return selectedAnnotations.map(sel => {
+        if (sel.imageId) {
+            const image = images.find(img => img.id === sel.imageId);
+            return image?.annotations.find(a => a.id === sel.annotationId);
+        } else {
+            return canvasAnnotations.find(a => a.id === sel.annotationId);
         }
-        return { ...img, tags: newTags };
-      }
-      return img;
-    });
-    pushHistory({ images: newImages, groups, canvasAnnotations });
+    }).filter((a): a is Annotation => !!a);
+  }, [selectedAnnotations, images, canvasAnnotations]);
+
+  const floatingEditorPosition = useMemo((): React.CSSProperties => {
+    if (selectedAnnotations.length === 0 || !canvasRef.current) {
+        return { display: 'none' };
+    }
+    
+    const canvasRect = canvasRef.current.getBoundingClientRect();
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return { display: 'none' };
+
+    const bounds = getMultiAnnotationBounds(selectedAnnotations, images, canvasAnnotations, ctx);
+    if (!bounds) return { display: 'none' };
+
+    // transform bounds to screen space
+    const screenX = bounds.x * viewTransform.scale + viewTransform.offset.x + canvasRect.left;
+    const screenY = bounds.y * viewTransform.scale + viewTransform.offset.y + canvasRect.top;
+    const screenHeight = bounds.height * viewTransform.scale;
+
+    return {
+        position: 'fixed',
+        left: `${screenX}px`,
+        top: `${screenY + screenHeight + 10}px`,
+        zIndex: 20,
+    };
+  }, [selectedAnnotations, images, canvasAnnotations, viewTransform]);
+    
+  const deleteGroup = useCallback((groupId: string) => {
+    const nextGroups = groups.filter(g => g.id !== groupId)
+        .map(g => ({...g, groupIds: g.groupIds.filter(id => id !== groupId)}));
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
-  const handleRemoveTag = useCallback((imageId: string, tagIndex: number) => {
-    const newImages = images.map(img => {
-      if (img.id === imageId) {
-        const newTags = [...(img.tags || [])];
-        newTags.splice(tagIndex, 1);
-        return { ...img, tags: newTags };
-      }
-      return img;
+  const renameGroup = useCallback((groupId: string, newName: string) => {
+    const nextGroups = groups.map(g => g.id === groupId ? { ...g, name: newName } : g);
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+  
+  const toggleGroupExpanded = useCallback((groupId: string) => {
+    const newGroups = groups.map(g => g.id === groupId ? { ...g, isExpanded: !g.isExpanded } : g);
+    const newHistory = [...history];
+    newHistory[historyIndex] = { ...newHistory[historyIndex], groups: newGroups };
+    setAppState(prev => ({ ...prev, history: newHistory }));
+  }, [groups, history, historyIndex]);
+
+  const addImageToGroup = useCallback((groupId: string, imageId: string) => {
+    const nextGroups = groups.map(g => {
+        let newImageIds = g.imageIds.filter(id => id !== imageId);
+        if (g.id === groupId) {
+            newImageIds.push(imageId);
+        }
+        return { ...g, imageIds: newImageIds };
     });
-    pushHistory({ images: newImages, groups, canvasAnnotations });
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+
+  const toggleImageAnnotationsExpanded = useCallback((imageId: string) => {
+    setAppState(prev => {
+        const current = new Set(prev.expandedImageAnnotationIds);
+        if (current.has(imageId)) {
+            current.delete(imageId);
+        } else {
+            current.add(imageId);
+        }
+        return { ...prev, expandedImageAnnotationIds: Array.from(current) };
+    });
+  }, []);
+
+  const renameGroupLabel = useCallback((groupId: string, newLabel: string) => {
+    const nextGroups = groups.map(g => g.id === groupId ? { ...g, label: newLabel } : g);
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
+  }, [pushHistory, images, groups, canvasAnnotations]);
+  
+  const toggleGroupLabel = useCallback((groupId: string) => {
+    const nextGroups = groups.map(g => g.id === groupId ? { ...g, showLabel: !g.showLabel } : g);
+    // This is UI state and should probably not create history, but we follow the pattern for now
+    pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
   return (
-    <div className="flex h-screen w-screen bg-gray-900 font-sans overflow-hidden">
+    <div className="flex h-screen w-screen overflow-hidden bg-gray-900 text-white">
       <LeftSidebar
         onFileChange={handleFileChange}
         selectedImage={selectedImage}
@@ -2448,96 +2201,132 @@ const App: React.FC = () => {
         onDownloadSelectedImages={handleDownloadSelectedImages}
         isDirty={isDirty}
       />
-      <main className="flex-1 h-full bg-gray-800 relative">
-        <CanvasWrapper
-          ref={canvasRef}
-          images={images}
-          groups={groups}
-          selectedImageIds={selectedImageIds}
-          setSelectedImageId={(id, opts) => handleSelectLayer(id!, 'image', opts)}
-          onSelectImages={handleSelectImages}
-          cropArea={cropArea}
-          setCropArea={(area) => setAppState(prev => ({ ...prev, cropArea: typeof area === 'function' ? area(prev.cropArea) : area }))}
-          aspectRatio={aspectRatio}
-          setImages={setImagesForInteraction}
-          onInteractionEnd={commitInteraction}
-          onMoveSelectedImages={handleMoveSelectedImages}
-          activeTool={activeTool}
-          setActiveTool={setActiveTool}
-          toolOptions={toolOptions}
-          addAnnotation={addAnnotation}
-          deleteSelectedAnnotations={deleteSelectedAnnotations}
-          viewTransform={viewTransform}
-          setViewTransform={(transform) => setAppState(prev => ({...prev, viewTransform: typeof transform === 'function' ? transform(prev.viewTransform) : transform}))}
-          selectedAnnotations={selectedAnnotations}
-          setSelectedAnnotations={(updater) => setAppState(prev => ({...prev, selectedAnnotations: updater(prev.selectedAnnotations), selectedImageIds: [], selectedLayerId: null }))}
-          updateAnnotation={updateSelectedAnnotationsForInteraction}
-          updateMultipleAnnotationsForInteraction={updateMultipleAnnotationsForInteraction}
-          selectedAnnotationObjects={selectedAnnotationObjects}
-          onColorPicked={handleColorPicked}
-          canvasAnnotations={canvasAnnotations}
-          addCanvasAnnotation={addCanvasAnnotation}
-          lastCanvasMousePosition={lastCanvasMousePosition}
-          onMoveCanvasAnnotations={(delta) => {
-            const selectedCanvasAnnos = new Set(selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId));
-            setCanvasAnnotationsForInteraction(prevAnnos => prevAnnos.map(anno => {
-                if (!selectedCanvasAnnos.has(anno.id)) return anno;
-                switch (anno.type) {
-                    case 'rect': case 'circle': case 'text':
-                        return { ...anno, x: anno.x + delta.x, y: anno.y + delta.y };
-                    case 'freehand':
-                        return { ...anno, points: anno.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y })) };
-                    case 'line': case 'arrow':
-                        return { ...anno, start: { x: anno.start.x + delta.x, y: anno.start.y + delta.y }, end: { x: anno.end.x + delta.x, y: anno.end.y + delta.y } };
-                    default: return anno;
+      
+      <div className="flex-1 relative bg-gray-800 overflow-hidden" ref={canvasContainerRef}>
+         <CanvasWrapper
+            ref={canvasRef}
+            images={images}
+            groups={groups}
+            setImages={setImagesForInteraction}
+            onInteractionEnd={commitInteraction}
+            selectedImageIds={selectedImageIds}
+            setSelectedImageId={(id, opts) => id ? handleSelectLayer(id, 'image', opts) : handleSelectImages([], false)}
+            onSelectImages={handleSelectImages}
+            onBoxSelect={handleBoxSelect}
+            cropArea={cropArea}
+            setCropArea={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.cropArea) : updater;
+                    return { ...prev, cropArea: newVal };
+                });
+            }}
+            aspectRatio={aspectRatio}
+            activeTool={activeTool}
+            setActiveTool={setActiveTool}
+            toolOptions={toolOptions}
+            addAnnotation={addAnnotation}
+            deleteSelectedAnnotations={deleteSelectedAnnotations}
+            viewTransform={viewTransform}
+            setViewTransform={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.viewTransform) : updater;
+                    return { ...prev, viewTransform: newVal };
+                });
+            }}
+            selectedAnnotations={selectedAnnotations}
+            setSelectedAnnotations={handleSetSelectedAnnotations}
+            updateAnnotation={updateSelectedAnnotationsForInteraction}
+            updateMultipleAnnotationsForInteraction={updateMultipleAnnotationsForInteraction}
+            selectedAnnotationObjects={selectedAnnotationObjects}
+            onColorPicked={handleColorPicked}
+            canvasAnnotations={canvasAnnotations}
+            addCanvasAnnotation={addCanvasAnnotation}
+            onMoveCanvasAnnotations={handleMoveCanvasAnnotations}
+            onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
+            reparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
+            onMoveSelectedImages={handleMoveSelectedImages}
+            lastCanvasMousePosition={lastCanvasMousePosition}
+            onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
+            selectedLayerId={selectedLayerId}
+         />
+         <div style={floatingEditorPosition}>
+            <FloatingAnnotationEditor
+              ref={floatingEditorRef}
+              style={{}}
+              selectedAnnotations={selectedAnnotationObjects}
+              onUpdate={updateSelectedAnnotationsForInteraction}
+              onDelete={deleteSelectedAnnotations}
+            />
+         </div>
+         
+         <MiniMap 
+             images={images} 
+             viewTransform={viewTransform} 
+             setViewTransform={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.viewTransform) : updater;
+                    return { ...prev, viewTransform: newVal };
+                });
+             }}
+             viewportSize={{ width: windowSize.width - 320 - 256, height: windowSize.height }}
+             groups={groups}
+         />
+      </div>
+      <LayersPanel
+        images={images}
+        visualLayerOrder={visualLayerOrder}
+        onRenameImage={renameCanvasImage}
+        onSelectLayer={handleSelectLayer}
+        onCenterOnLayer={handleCenterOnLayer}
+        onSelectImages={handleSelectImages}
+        onDeleteImage={deleteImage}
+        onReorderTopLevelLayer={reorderTopLevelLayer}
+        onReorderLayer={handleReorderLayer}
+        selectedAnnotations={selectedAnnotations}
+        onSelectAnnotation={handleSelectAnnotation}
+        groups={groups}
+        onDeleteGroup={deleteGroup}
+        onRenameGroup={renameGroup}
+        onToggleGroupExpanded={toggleGroupExpanded}
+        onAddImageToGroup={addImageToGroup}
+        onUngroupImages={(ids) => {
+            const imageToUngroup = ids[0];
+            const oldGroup = groups.find(g => g.imageIds.includes(imageToUngroup));
+            if (oldGroup) {
+                const updatedGroups = groups.map(g => 
+                    g.id === oldGroup.id ? { ...g, imageIds: g.imageIds.filter(id => id !== imageToUngroup) } : g
+                );
+                pushHistory({ images, groups: updatedGroups, canvasAnnotations });
+            }
+        }}
+        canvasAnnotations={canvasAnnotations}
+        onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
+        onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
+        selectedImageIds={selectedImageIds}
+        selectedLayerId={selectedLayerId}
+        parentImageIds={new Set()}
+        expandedImageAnnotationIds={expandedImageAnnotationIds}
+        onToggleImageAnnotationsExpanded={toggleImageAnnotationsExpanded}
+        onReparentGroup={reparentGroup}
+        onRenameGroupLabel={renameGroupLabel}
+        onToggleGroupLabel={toggleGroupLabel}
+        onReverseLayerOrder={handleReverseLayerOrder}
+        onAddTag={(imageId, tag) => {
+            const newImages = images.map(img => img.id === imageId ? { ...img, tags: [...(img.tags || []), tag] } : img);
+            pushHistory({ images: newImages, groups, canvasAnnotations });
+        }}
+        onRemoveTag={(imageId, tagIndex) => {
+            const newImages = images.map(img => {
+                if (img.id === imageId && img.tags) {
+                    const newTags = [...img.tags];
+                    newTags.splice(tagIndex, 1);
+                    return { ...img, tags: newTags };
                 }
-            }));
-          }}
-          onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
-          onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
-          reparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
-        />
-        <LayersPanel
-          images={images}
-          visualLayerOrder={visualLayerOrder}
-          onRenameImage={renameCanvasImage}
-          onSelectLayer={handleSelectLayer}
-          onCenterOnLayer={handleCenterOnLayer}
-          onSelectImages={handleSelectImages}
-          onDeleteImage={deleteImage}
-          onReorderTopLevelLayer={reorderTopLevelLayer}
-          onReorderLayer={handleReorderLayer}
-          selectedAnnotations={selectedAnnotations}
-          onSelectAnnotation={handleSelectAnnotation}
-          groups={groups}
-          onDeleteGroup={deleteGroup}
-          onRenameGroup={renameGroup}
-          onToggleGroupExpanded={toggleGroupExpanded}
-          onAddImageToGroup={addImageToGroup}
-          onUngroupImages={ungroupImages}
-          canvasAnnotations={canvasAnnotations}
-          onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
-          onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
-          selectedImageIds={selectedImageIds}
-          selectedLayerId={selectedLayerId}
-          parentImageIds={parentImageIds}
-          expandedImageAnnotationIds={expandedImageAnnotationIds}
-          onToggleImageAnnotationsExpanded={toggleImageAnnotationsExpanded}
-          onReparentGroup={reparentGroup}
-          onRenameGroupLabel={renameGroupLabel}
-          onToggleGroupLabel={toggleGroupLabel}
-          onReverseLayerOrder={handleReverseLayerOrder}
-          onAddTag={handleAddTag}
-          onRemoveTag={handleRemoveTag}
-        />
-        <FloatingAnnotationEditor
-          ref={floatingEditorRef}
-          style={floatingEditorPosition}
-          selectedAnnotations={selectedAnnotationObjects}
-          onUpdate={updateSelectedAnnotations}
-          onDelete={deleteSelectedAnnotations}
-        />
-      </main>
+                return img;
+            });
+            pushHistory({ images: newImages, groups, canvasAnnotations });
+        }}
+      />
     </div>
   );
 };
