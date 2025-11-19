@@ -1,13 +1,12 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-// FIX: Corrected import paths for being inside src/ directory
 import { LeftSidebar } from './components/LeftSidebar';
 import { LayersPanel } from './components/LayersPanel';
 import { CanvasWrapper } from './components/CanvasWrapper';
 import { FloatingAnnotationEditor } from './components/FloatingAnnotationEditor';
 import { MiniMap } from './components/MiniMap';
-import { CanvasImage, Rect, AspectRatio, Annotation, AnnotationTool, Point, TextAnnotation, Group } from './types';
+import { CanvasImage, Rect, AspectRatio, Annotation, AnnotationTool, Point, Group, TextAnnotation } from './types';
 import { readImageFile, downloadDataUrl, createImageElementFromDataUrl } from './utils/fileUtils';
-import { drawAnnotation, getAnnotationBounds, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds, getGroupBounds, getMultiAnnotationBounds } from './utils/canvasUtils';
+import { drawAnnotation, transformGlobalToLocal, transformLocalToGlobal, getImagesBounds, getGroupBounds, getMultiAnnotationBounds } from './utils/canvasUtils';
 
 declare var JSZip: any;
 
@@ -242,6 +241,13 @@ const App: React.FC = () => {
   const floatingEditorRef = useRef<HTMLDivElement>(null);
   const lastCanvasMousePosition = useRef<Point>({ x: 0, y: 0 });
 
+  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+      const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const pushHistory = useCallback((newState: HistoryEntry) => {
     setAppState(current => {
         const newHistory = current.history.slice(0, current.historyIndex + 1);
@@ -355,6 +361,35 @@ const App: React.FC = () => {
     return images.find(img => img.id === lastId) || null;
   }, [images, selectedImageIds]);
 
+  const handleFileChange = useCallback(async (files: FileList | null) => {
+    if (!files) return;
+    const newImages: CanvasImage[] = [];
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith('image/')) {
+        try {
+          let newImage = await readImageFile(file);
+          
+          if (canvasRef.current) {
+            const { width, height } = canvasRef.current.getBoundingClientRect();
+            const centerX = (width / 2 - viewTransform.offset.x) / viewTransform.scale;
+            const centerY = (height / 2 - viewTransform.offset.y) / viewTransform.scale;
+            newImage = {
+                ...newImage,
+                x: centerX - (newImage.width * newImage.scale / 2),
+                y: centerY - (newImage.height * newImage.scale / 2),
+            };
+          }
+          newImages.push(newImage);
+        } catch (error) {
+          console.error("Error reading image file:", error);
+        }
+      }
+    }
+    if (newImages.length > 0) {
+        pushHistory({ images: [...images, ...newImages], groups, canvasAnnotations });
+    }
+  }, [pushHistory, images, groups, canvasAnnotations, viewTransform]);
+
   // Paste Image Support
   useEffect(() => {
       const handlePaste = async (e: ClipboardEvent) => {
@@ -397,6 +432,185 @@ const App: React.FC = () => {
       return () => window.removeEventListener('paste', handlePaste);
   }, [images, groups, canvasAnnotations, viewTransform, pushHistory]);
 
+  // Crop and other logic must be defined before being used in keyboard listeners
+  const handleCrop = useCallback(async () => {
+    if (!cropArea || cropArea.width === 0 || cropArea.height === 0) return;
+
+    const mimeType = `image/${exportFormat}`;
+    const extension = exportFormat === 'png' ? '.png' : '.jpg';
+
+    const intersects = (img: CanvasImage) => {
+      const imgRight = img.x + img.width * img.scale;
+      const imgBottom = img.y + img.height * img.scale;
+      const cropRight = cropArea.x + cropArea.width;
+      const cropBottom = cropArea.y + cropArea.height;
+      return !(cropArea.x > imgRight || cropRight < img.x || cropArea.y > imgBottom || cropBottom < img.y);
+    };
+
+    const imagesToCrop = selectedImageIds.length > 0
+      ? images.filter(img => selectedImageIds.includes(img.id) && intersects(img))
+      : images.filter(intersects);
+
+    if (imagesToCrop.length === 0) {
+      alert("No image found within the crop area.");
+      setAppState(prev => ({...prev, cropArea: null}));
+      return;
+    }
+    
+    const originalsToArchive = Object.fromEntries(imagesToCrop.map(img => [img.id, img]));
+    setAppState(prev => ({...prev, archivedImages: { ...prev.archivedImages, ...originalsToArchive }}));
+
+    const dpr = window.devicePixelRatio || 1;
+    const newCroppedImages: CanvasImage[] = [];
+    const idsToRemove = imagesToCrop.map(img => img.id);
+    const idMap: { [oldId: string]: string } = {};
+
+    for (const imageToCrop of imagesToCrop) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = cropArea.width * dpr;
+      tempCanvas.height = cropArea.height * dpr;
+      const ctx = tempCanvas.getContext('2d');
+      if (!ctx) continue;
+      ctx.scale(dpr, dpr);
+
+      ctx.save();
+      const centerX = imageToCrop.x + (imageToCrop.width * imageToCrop.scale / 2);
+      const centerY = imageToCrop.y + (imageToCrop.height * imageToCrop.scale / 2);
+      
+      ctx.translate(centerX - cropArea.x, centerY - cropArea.y);
+      ctx.rotate(imageToCrop.rotation * Math.PI / 180);
+      ctx.scale(imageToCrop.scale, imageToCrop.scale);
+      
+      ctx.drawImage(imageToCrop.element, -imageToCrop.width / 2, -imageToCrop.height / 2, imageToCrop.width, imageToCrop.height);
+      
+      if (imageToCrop.outlineWidth && imageToCrop.outlineWidth > 0) {
+        ctx.strokeStyle = hexToRgba(imageToCrop.outlineColor || '#000000', imageToCrop.outlineOpacity || 1);
+        ctx.lineWidth = imageToCrop.outlineWidth / imageToCrop.scale;
+        ctx.strokeRect(-imageToCrop.width / 2, -imageToCrop.height / 2, imageToCrop.width, imageToCrop.height);
+      }
+      ctx.restore();
+      
+      const { canvas: trimmedCanvas, bounds: trimBounds } = trimCanvas(tempCanvas);
+      
+      if (!trimBounds) continue;
+
+      const dataUrl = trimmedCanvas.toDataURL(mimeType);
+      const element = await createImageElementFromDataUrl(dataUrl);
+      
+      const newImageOrigin = {
+        x: cropArea.x + (trimBounds.x / dpr),
+        y: cropArea.y + (trimBounds.y / dpr)
+      };
+
+      const transformedAnnotations: Annotation[] = (imageToCrop.annotations || []).map(annotation => {
+          const newAnno = JSON.parse(JSON.stringify(annotation)) as Annotation;
+
+          const transformPoint = (p: Point): Point => {
+              const imgCenterX_canvas = imageToCrop.x + (imageToCrop.width * imageToCrop.scale) / 2;
+              const imgCenterY_canvas = imageToCrop.y + (imageToCrop.height * imageToCrop.scale) / 2;
+              
+              let x = p.x - imageToCrop.width / 2;
+              let y = p.y - imageToCrop.height / 2;
+              
+              x *= imageToCrop.scale;
+              y *= imageToCrop.scale;
+              
+              const rad = imageToCrop.rotation * Math.PI / 180;
+              const cos = Math.cos(rad);
+              const sin = Math.sin(rad);
+              
+              const canvasX = (x * cos - y * sin) + imgCenterX_canvas;
+              const canvasY = (x * sin + y * cos) + imgCenterY_canvas;
+              
+              const newLocalX = canvasX - newImageOrigin.x;
+              const newLocalY = canvasY - newImageOrigin.y;
+              
+              return { x: newLocalX, y: newLocalY };
+          };
+
+          newAnno.scale = annotation.scale * imageToCrop.scale;
+          newAnno.rotation = annotation.rotation + imageToCrop.rotation;
+
+          switch (newAnno.type) {
+              case 'rect':
+              case 'text':
+              case 'circle': {
+                  const transformedPos = transformPoint({ x: newAnno.x, y: newAnno.y });
+                  newAnno.x = transformedPos.x;
+                  newAnno.y = transformedPos.y;
+                  break;
+              }
+              case 'freehand': {
+                  newAnno.points = newAnno.points.map(transformPoint);
+                  break;
+              }
+              case 'arrow':
+              case 'line': {
+                  newAnno.start = transformPoint(newAnno.start);
+                  newAnno.end = transformPoint(newAnno.end);
+                  break;
+              }
+          }
+          return newAnno;
+      });
+
+      const newImage: CanvasImage = {
+        id: `img-${Date.now()}-${Math.random()}`,
+        name: imageToCrop.name, // Preserving original name
+        element,
+        x: newImageOrigin.x,
+        y: newImageOrigin.y,
+        width: element.width,
+        height: element.height,
+        scale: 1,
+        rotation: 0,
+        annotations: transformedAnnotations,
+        createdAt: imageToCrop.createdAt,
+        outlineColor: '#000000',
+        outlineWidth: 0,
+        outlineOpacity: 1,
+        uncroppedFromId: imageToCrop.id,
+        originalHeight: imageToCrop.originalHeight,
+        originalWidth: imageToCrop.originalWidth,
+        cropRect: null,
+        tags: imageToCrop.tags,
+      };
+      newCroppedImages.push(newImage);
+      idMap[imageToCrop.id] = newImage.id;
+    }
+    
+    const newImageMap = new Map(newCroppedImages.map(img => [img.uncroppedFromId!, img]));
+    let nextImages: CanvasImage[] = [];
+    images.forEach(img => {
+        if (newImageMap.has(img.id)) {
+            nextImages.push(newImageMap.get(img.id)!);
+        } else if (!idsToRemove.includes(img.id)) {
+            nextImages.push(img);
+        }
+    });
+
+    const nextGroups = groups.map(g => {
+        const newImageIds: string[] = [];
+        g.imageIds.forEach(oldId => {
+            if (idMap[oldId]) {
+                newImageIds.push(idMap[oldId]);
+            } else if (!idsToRemove.includes(oldId)) {
+                newImageIds.push(oldId);
+            }
+        });
+        return { ...g, imageIds: newImageIds };
+    }).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
+
+    pushHistory({ images: nextImages, groups: nextGroups, canvasAnnotations });
+    
+    setAppState(prev => ({
+        ...prev,
+        selectedImageIds: newCroppedImages.map(img => img.id),
+        cropArea: null
+    }));
+
+  }, [cropArea, images, groups, canvasAnnotations, selectedImageIds, exportFormat, pushHistory]);
+
   // Copy/Paste Annotations & Global Shortcuts
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -425,6 +639,13 @@ const App: React.FC = () => {
               if (selectedAnnotations.length > 0) {
                   setClipboard({ selections: selectedAnnotations });
               }
+          }
+          
+          // Apply Crop (Enter)
+          if (e.key === 'Enter' && cropArea) {
+              e.preventDefault();
+              handleCrop();
+              return;
           }
 
           // Paste
@@ -493,34 +714,29 @@ const App: React.FC = () => {
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedAnnotations, clipboard, images, groups, canvasAnnotations, pushHistory, handleUndo, handleRedo]);
+  }, [selectedAnnotations, clipboard, images, groups, canvasAnnotations, pushHistory, handleUndo, handleRedo, handleCrop, cropArea]);
 
-  const handleFileChange = useCallback(async (files: FileList | null) => {
-    if (!files) return;
-    const newImages: CanvasImage[] = [];
-    for (const file of Array.from(files)) {
-      if (file.type.startsWith('image/')) {
-        try {
-          let newImage = await readImageFile(file);
-          
-          if (canvasRef.current) {
-            const { width, height } = canvasRef.current.getBoundingClientRect();
-            const centerX = (width / 2 - viewTransform.offset.x) / viewTransform.scale;
-            const centerY = (height / 2 - viewTransform.offset.y) / viewTransform.scale;
-            newImage = {
-                ...newImage,
-                x: centerX - (newImage.width * newImage.scale / 2),
-                y: centerY - (newImage.height * newImage.scale / 2),
-            };
+  const handleUncrop = useCallback((imageIds: string[]) => {
+      const idsToUncrop = new Set(imageIds);
+      const newSelection: string[] = [];
+
+      const newImages = images.map(img => {
+          if (idsToUncrop.has(img.id) && img.uncroppedFromId && archivedImages[img.uncroppedFromId]) {
+              const original = { ...archivedImages[img.uncroppedFromId] };
+              original.x = img.x + (img.width / 2) - (original.width * original.scale / 2);
+              original.y = img.y + (img.height / 2) - (original.height * original.scale / 2);
+              newSelection.push(original.id);
+              return original;
           }
-          newImages.push(newImage);
-        } catch (error) {
-          console.error("Error reading image file:", error);
-        }
-      }
-    }
-    pushHistory({ images: [...images, ...newImages], groups, canvasAnnotations });
-  }, [pushHistory, images, groups, canvasAnnotations, viewTransform]);
+          return img;
+      });
+
+      pushHistory({ images: newImages, groups, canvasAnnotations });
+      setAppState(prev => {
+        const remaining = prev.selectedImageIds.filter(id => !idsToUncrop.has(id));
+        return { ...prev, selectedImageIds: [...remaining, ...newSelection] };
+      });
+  }, [pushHistory, images, groups, canvasAnnotations, archivedImages]);
 
   const updateSelectedImages = useCallback((changes: Partial<Omit<CanvasImage, 'id' | 'annotations' | 'createdAt' | 'name' | 'element' | 'width' | 'height'>>) => {
     resetLastArrangement();
@@ -543,18 +759,6 @@ const App: React.FC = () => {
         selectedLayerId: null,
     }));
   }, [pushHistory, images, groups, canvasAnnotations]);
-
-  const deleteSelectedImages = useCallback(() => {
-    if (selectedImageIds.length === 0) return;
-    const newImages = images.filter(img => !selectedImageIds.includes(img.id));
-    const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)) })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
-    pushHistory({ images: newImages, groups: newGroups, canvasAnnotations });
-    setAppState(prev => ({
-        ...prev,
-        selectedImageIds: [],
-        selectedLayerId: null,
-    }));
-  }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations]);
 
   const addAnnotation = useCallback((imageId: string, annotation: Annotation) => {
     const newImages = images.map(img => {
@@ -1296,14 +1500,53 @@ const App: React.FC = () => {
   const arrangeImages = useCallback((direction: 'horizontal' | 'vertical') => {
     if (selectedImageIds.length === 0) return;
 
-    // Treat every selected image individually, ignoring group structure for arrangement
-    const arrangeableItems = selectedImageIds
-        .map(id => images.find(img => img.id === id))
-        .filter((img): img is CanvasImage => !!img)
-        .map(img => ({
-            data: img,
-            bounds: { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale }
-        }));
+    // Identify top-level entities (Groups or Images)
+    const selectedIdsSet = new Set(selectedImageIds);
+    const processedImageIds = new Set<string>();
+    const arrangeableItems: { type: 'group' | 'image', data: Group | CanvasImage, bounds: Rect }[] = [];
+
+    // 1. Find fully selected groups
+    const fullySelectedGroups = groups.filter(g => {
+         const gIds = getAllImageIdsInGroup(g.id, groups);
+         return gIds.length > 0 && gIds.every(id => selectedIdsSet.has(id));
+    });
+
+    // 2. Filter to top-most fully selected groups
+    const topLevelGroups = fullySelectedGroups.filter(g => {
+        // A group is top-level if none of its parents are in fullySelectedGroups
+        let curr = g;
+        while (curr.parentId) {
+             if (fullySelectedGroups.some(p => p.id === curr.parentId)) return false;
+             const p = groups.find(x => x.id === curr.parentId);
+             if (!p) break;
+             curr = p;
+        }
+        return true;
+    });
+
+    // 3. Add groups to items
+    topLevelGroups.forEach(g => {
+        const gIds = getAllImageIdsInGroup(g.id, groups);
+        gIds.forEach(id => processedImageIds.add(id));
+        const bounds = getGroupBounds(g, groups, images);
+        if (bounds) {
+            arrangeableItems.push({ type: 'group', data: g, bounds });
+        }
+    });
+
+    // 4. Add remaining independent images
+    selectedImageIds.forEach(id => {
+        if (!processedImageIds.has(id)) {
+            const img = images.find(i => i.id === id);
+            if (img) {
+                 arrangeableItems.push({ 
+                     type: 'image', 
+                     data: img, 
+                     bounds: { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale }
+                 });
+            }
+        }
+    });
 
     if (arrangeableItems.length === 0) return;
 
@@ -1334,14 +1577,25 @@ const App: React.FC = () => {
     const minY = Math.min(...gridInput.map(i => i.y));
 
     // Run Layout with increased spacing
-    const newPositions = arrangeItemsInGrid(gridInput, direction, minX, minY, 30);
+    const newPositions = arrangeItemsInGrid(gridInput, direction, minX, minY, 50);
 
     // Apply updates
-    const newImages = images.map(img => {
-         if (newPositions[img.id]) {
-             return { ...img, x: newPositions[img.id].x, y: newPositions[img.id].y };
-         }
-         return img;
+    let newImages = [...images];
+    
+    arrangeableItems.forEach(item => {
+        const newPos = newPositions[item.data.id];
+        if (!newPos) return;
+        
+        const dx = newPos.x - item.bounds.x;
+        const dy = newPos.y - item.bounds.y;
+
+        if (item.type === 'image') {
+             newImages = newImages.map(img => img.id === item.data.id ? { ...img, x: newPos.x, y: newPos.y } : img);
+        } else {
+             // Move all images in group by dx, dy
+             const gIds = new Set(getAllImageIdsInGroup((item.data as Group).id, groups));
+             newImages = newImages.map(img => gIds.has(img.id) ? { ...img, x: img.x + dx, y: img.y + dy } : img);
+        }
     });
 
     pushHistory({ images: newImages, groups, canvasAnnotations });
@@ -1372,7 +1626,7 @@ const App: React.FC = () => {
     const selectionBounds = getImagesBounds(selectedImagesInOrder);
     if (!selectionBounds) return;
 
-    const SPACING = 20; 
+    const SPACING = 10;
     const allNewPositions: { [id: string]: { x: number; y: number } } = {};
     
     let currentX = 0;
@@ -1435,206 +1689,6 @@ const App: React.FC = () => {
     });
     pushHistory({ images: newImages, groups, canvasAnnotations });
   }, [selectedImageIds, pushHistory, images, groups, canvasAnnotations, resetLastArrangement]);
-  
-  const handleCrop = useCallback(async () => {
-    if (!cropArea || cropArea.width === 0 || cropArea.height === 0) return;
-
-    const mimeType = `image/${exportFormat}`;
-    const extension = exportFormat === 'png' ? '.png' : '.jpg';
-
-    const intersects = (img: CanvasImage) => {
-      const imgRight = img.x + img.width * img.scale;
-      const imgBottom = img.y + img.height * img.scale;
-      const cropRight = cropArea.x + cropArea.width;
-      const cropBottom = cropArea.y + cropArea.height;
-      return !(cropArea.x > imgRight || cropRight < img.x || cropArea.y > imgBottom || cropBottom < img.y);
-    };
-
-    const imagesToCrop = selectedImageIds.length > 0
-      ? images.filter(img => selectedImageIds.includes(img.id) && intersects(img))
-      : images.filter(intersects);
-
-    if (imagesToCrop.length === 0) {
-      alert("No image found within the crop area.");
-      setAppState(prev => ({...prev, cropArea: null}));
-      return;
-    }
-    
-    const originalsToArchive = Object.fromEntries(imagesToCrop.map(img => [img.id, img]));
-    setAppState(prev => ({...prev, archivedImages: { ...prev.archivedImages, ...originalsToArchive }}));
-
-    const dpr = window.devicePixelRatio || 1;
-    const newCroppedImages: CanvasImage[] = [];
-    const idsToRemove = imagesToCrop.map(img => img.id);
-    const idMap: { [oldId: string]: string } = {};
-
-    for (const imageToCrop of imagesToCrop) {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = cropArea.width * dpr;
-      tempCanvas.height = cropArea.height * dpr;
-      const ctx = tempCanvas.getContext('2d');
-      if (!ctx) continue;
-      ctx.scale(dpr, dpr);
-
-      ctx.save();
-      const centerX = imageToCrop.x + (imageToCrop.width * imageToCrop.scale / 2);
-      const centerY = imageToCrop.y + (imageToCrop.height * imageToCrop.scale / 2);
-      
-      ctx.translate(centerX - cropArea.x, centerY - cropArea.y);
-      ctx.rotate(imageToCrop.rotation * Math.PI / 180);
-      ctx.scale(imageToCrop.scale, imageToCrop.scale);
-      
-      ctx.drawImage(imageToCrop.element, -imageToCrop.width / 2, -imageToCrop.height / 2, imageToCrop.width, imageToCrop.height);
-      
-      if (imageToCrop.outlineWidth && imageToCrop.outlineWidth > 0) {
-        ctx.strokeStyle = hexToRgba(imageToCrop.outlineColor || '#000000', imageToCrop.outlineOpacity || 1);
-        ctx.lineWidth = imageToCrop.outlineWidth / imageToCrop.scale;
-        ctx.strokeRect(-imageToCrop.width / 2, -imageToCrop.height / 2, imageToCrop.width, imageToCrop.height);
-      }
-      ctx.restore();
-      
-      const { canvas: trimmedCanvas, bounds: trimBounds } = trimCanvas(tempCanvas);
-      
-      if (!trimBounds) continue;
-
-      const dataUrl = trimmedCanvas.toDataURL(mimeType);
-      const element = await createImageElementFromDataUrl(dataUrl);
-      
-      const newImageOrigin = {
-        x: cropArea.x + (trimBounds.x / dpr),
-        y: cropArea.y + (trimBounds.y / dpr)
-      };
-
-      const transformedAnnotations: Annotation[] = (imageToCrop.annotations || []).map(annotation => {
-          const newAnno = JSON.parse(JSON.stringify(annotation)) as Annotation;
-
-          const transformPoint = (p: Point): Point => {
-              const imgCenterX_canvas = imageToCrop.x + (imageToCrop.width * imageToCrop.scale) / 2;
-              const imgCenterY_canvas = imageToCrop.y + (imageToCrop.height * imageToCrop.scale) / 2;
-              
-              let x = p.x - imageToCrop.width / 2;
-              let y = p.y - imageToCrop.height / 2;
-              
-              x *= imageToCrop.scale;
-              y *= imageToCrop.scale;
-              
-              const rad = imageToCrop.rotation * Math.PI / 180;
-              const cos = Math.cos(rad);
-              const sin = Math.sin(rad);
-              
-              const canvasX = (x * cos - y * sin) + imgCenterX_canvas;
-              const canvasY = (x * sin + y * cos) + imgCenterY_canvas;
-              
-              const newLocalX = canvasX - newImageOrigin.x;
-              const newLocalY = canvasY - newImageOrigin.y;
-              
-              return { x: newLocalX, y: newLocalY };
-          };
-
-          newAnno.scale = annotation.scale * imageToCrop.scale;
-          newAnno.rotation = annotation.rotation + imageToCrop.rotation;
-
-          switch (newAnno.type) {
-              case 'rect':
-              case 'text':
-              case 'circle': {
-                  const transformedPos = transformPoint({ x: newAnno.x, y: newAnno.y });
-                  newAnno.x = transformedPos.x;
-                  newAnno.y = transformedPos.y;
-                  break;
-              }
-              case 'freehand': {
-                  newAnno.points = newAnno.points.map(transformPoint);
-                  break;
-              }
-              case 'arrow':
-              case 'line': {
-                  newAnno.start = transformPoint(newAnno.start);
-                  newAnno.end = transformPoint(newAnno.end);
-                  break;
-              }
-          }
-          return newAnno;
-      });
-
-      const newImage: CanvasImage = {
-        id: `img-${Date.now()}-${Math.random()}`,
-        name: imageToCrop.name, // Preserving original name
-        element,
-        x: newImageOrigin.x,
-        y: newImageOrigin.y,
-        width: element.width,
-        height: element.height,
-        scale: 1,
-        rotation: 0,
-        annotations: transformedAnnotations,
-        createdAt: imageToCrop.createdAt,
-        outlineColor: '#000000',
-        outlineWidth: 0,
-        outlineOpacity: 1,
-        uncroppedFromId: imageToCrop.id,
-        originalHeight: imageToCrop.originalHeight,
-        originalWidth: imageToCrop.originalWidth,
-        cropRect: null,
-        tags: imageToCrop.tags,
-      };
-      newCroppedImages.push(newImage);
-      idMap[imageToCrop.id] = newImage.id;
-    }
-    
-    const newImageMap = new Map(newCroppedImages.map(img => [img.uncroppedFromId!, img]));
-    let nextImages: CanvasImage[] = [];
-    images.forEach(img => {
-        if (newImageMap.has(img.id)) {
-            nextImages.push(newImageMap.get(img.id)!);
-        } else if (!idsToRemove.includes(img.id)) {
-            nextImages.push(img);
-        }
-    });
-
-    const nextGroups = groups.map(g => {
-        const newImageIds: string[] = [];
-        g.imageIds.forEach(oldId => {
-            if (idMap[oldId]) {
-                newImageIds.push(idMap[oldId]);
-            } else if (!idsToRemove.includes(oldId)) {
-                newImageIds.push(oldId);
-            }
-        });
-        return { ...g, imageIds: newImageIds };
-    }).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
-
-    pushHistory({ images: nextImages, groups: nextGroups, canvasAnnotations });
-    
-    setAppState(prev => ({
-        ...prev,
-        selectedImageIds: newCroppedImages.map(img => img.id),
-        cropArea: null
-    }));
-
-  }, [cropArea, images, groups, canvasAnnotations, selectedImageIds, exportFormat, pushHistory]);
-
-  const handleUncrop = useCallback((imageIds: string[]) => {
-      const idsToUncrop = new Set(imageIds);
-      const newSelection: string[] = [];
-
-      const newImages = images.map(img => {
-          if (idsToUncrop.has(img.id) && img.uncroppedFromId && archivedImages[img.uncroppedFromId]) {
-              const original = { ...archivedImages[img.uncroppedFromId] };
-              original.x = img.x + (img.width / 2) - (original.width * original.scale / 2);
-              original.y = img.y + (img.height / 2) - (original.height * original.scale / 2);
-              newSelection.push(original.id);
-              return original;
-          }
-          return img;
-      });
-
-      pushHistory({ images: newImages, groups, canvasAnnotations });
-      setAppState(prev => {
-        const remaining = prev.selectedImageIds.filter(id => !idsToUncrop.has(id));
-        return { ...prev, selectedImageIds: [...remaining, ...newSelection] };
-      });
-  }, [pushHistory, images, groups, canvasAnnotations, archivedImages]);
   
   const handleCopyToClipboard = useCallback(async () => {
     const mimeType = `image/${exportFormat}`;
@@ -2133,14 +2187,6 @@ const App: React.FC = () => {
         pushHistory({ images: [...images].reverse(), groups, canvasAnnotations });
   }, [images, groups, canvasAnnotations, pushHistory]);
 
-  // Resize handler for MiniMap
-  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
-  useEffect(() => {
-      const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
-      window.addEventListener('resize', handleResize);
-      return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
   const viewportSize = useMemo(() => ({ width: windowSize.width, height: windowSize.height }), [windowSize]);
 
   const createGroupFromSelection = useCallback(() => {
@@ -2178,17 +2224,17 @@ const App: React.FC = () => {
     }).filter((a): a is Annotation => !!a);
   }, [selectedAnnotations, images, canvasAnnotations]);
 
-  const floatingEditorPosition = useMemo((): { top: number, left: number } | null => {
+  const floatingEditorPosition = useMemo((): { top: number, left: number } | undefined => {
     if (selectedAnnotations.length === 0 || !canvasRef.current) {
-        return null;
+        return undefined;
     }
     
     const canvasRect = canvasRef.current.getBoundingClientRect();
     const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return null;
+    if (!ctx) return undefined;
 
     const bounds = getMultiAnnotationBounds(selectedAnnotations, images, canvasAnnotations, ctx);
-    if (!bounds) return null;
+    if (!bounds) return undefined;
 
     // transform bounds to screen space
     const screenX = bounds.x * viewTransform.scale + viewTransform.offset.x + canvasRect.left;
@@ -2249,6 +2295,7 @@ const App: React.FC = () => {
   
   const toggleGroupLabel = useCallback((groupId: string) => {
     const nextGroups = groups.map(g => g.id === groupId ? { ...g, showLabel: !g.showLabel } : g);
+    // This is UI state and should probably not create history, but we follow the pattern for now
     pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
 
@@ -2343,9 +2390,9 @@ const App: React.FC = () => {
                initialPosition={floatingEditorPosition}
                selectedAnnotations={selectedAnnotationObjects}
                onUpdate={updateSelectedAnnotationsForInteraction}
-               onCompleteUpdate={updateSelectedAnnotations}
-               onCommit={commitInteraction}
                onDelete={deleteSelectedAnnotations}
+               onCommit={commitInteraction}
+               onCompleteUpdate={updateSelectedAnnotations}
              />
          )}
          

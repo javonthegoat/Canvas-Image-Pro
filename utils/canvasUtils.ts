@@ -377,6 +377,25 @@ export const getMultiAnnotationBounds = (selections: { imageId: string | null; a
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 };
 
+export type CropHandle = 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
+
+export const getCropHandles = (cropArea: Rect, scale: number): { name: CropHandle; rect: Rect; cursor: string }[] => {
+    const handleSize = 10 / scale;
+    const halfHandleSize = handleSize / 2;
+    const { x, y, width, height } = cropArea;
+
+    return [
+        { name: 'top-left', rect: { x: x - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nwse-resize' },
+        { name: 'top', rect: { x: x + width / 2 - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ns-resize' },
+        { name: 'top-right', rect: { x: x + width - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nesw-resize' },
+        { name: 'left', rect: { x: x - halfHandleSize, y: y + height / 2 - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ew-resize' },
+        { name: 'right', rect: { x: x + width - halfHandleSize, y: y + height / 2 - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ew-resize' },
+        { name: 'bottom-left', rect: { x: x - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nesw-resize' },
+        { name: 'bottom', rect: { x: x + width / 2 - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ns-resize' },
+        { name: 'bottom-right', rect: { x: x + width - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nwse-resize' },
+    ];
+};
+
 export const drawCanvas = (
     ctx: CanvasRenderingContext2D,
     canvas: HTMLCanvasElement,
@@ -604,6 +623,17 @@ export const drawCanvas = (
         ctx.setLineDash([5 / viewTransform.scale, 5 / viewTransform.scale]);
         ctx.strokeRect(cropArea.x, cropArea.y, cropArea.width, cropArea.height);
         ctx.setLineDash([]);
+
+        // Draw Crop Handles
+        const handles = getCropHandles(cropArea, viewTransform.scale);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#3b82f6'; // blue-500
+        ctx.lineWidth = 2 / viewTransform.scale;
+        
+        handles.forEach(handle => {
+            ctx.fillRect(handle.rect.x, handle.rect.y, handle.rect.width, handle.rect.height);
+            ctx.strokeRect(handle.rect.x, handle.rect.y, handle.rect.width, handle.rect.height);
+        });
     }
 
     if (marqueeRect) {

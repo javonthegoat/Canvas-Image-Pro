@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
-import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect } from '../utils/canvasUtils';
+import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect, getCropHandles, CropHandle } from '../utils/canvasUtils';
 import { rgbToHex } from '../utils/colorUtils';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
@@ -43,7 +43,6 @@ interface CanvasWrapperProps {
   selectedLayerId: string | null;
 }
 
-type CropHandle = 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right';
 type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end' | 'scale-multi-annotation' | 'rotate-multi-annotation';
 
 type InteractionState =
@@ -61,23 +60,6 @@ type InteractionState =
   | { mode: 'resize-arrow-end'; startPoint: Point; annotationId: string; imageId: string | null; }
   | { mode: 'scale-multi-annotation'; startPoint: Point; center: Point; initialAnnotations: Annotation[]; initialSelections: AnnotationSelection[]; startDist: number; }
   | { mode: 'rotate-multi-annotation'; startPoint: Point; center: Point; initialAnnotations: Annotation[]; initialSelections: AnnotationSelection[]; startAngle: number; };
-
-const getCropHandles = (cropArea: Rect, scale: number): { name: CropHandle; rect: Rect; cursor: string }[] => {
-    const handleSize = 10 / scale;
-    const halfHandleSize = handleSize / 2;
-    const { x, y, width, height } = cropArea;
-
-    return [
-        { name: 'top-left', rect: { x: x - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nwse-resize' },
-        { name: 'top', rect: { x: x + width / 2 - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ns-resize' },
-        { name: 'top-right', rect: { x: x + width - halfHandleSize, y: y - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nesw-resize' },
-        { name: 'left', rect: { x: x - halfHandleSize, y: y + height / 2 - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ew-resize' },
-        { name: 'right', rect: { x: x + width - halfHandleSize, y: y + height / 2 - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ew-resize' },
-        { name: 'bottom-left', rect: { x: x - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nesw-resize' },
-        { name: 'bottom', rect: { x: x + width / 2 - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'ns-resize' },
-        { name: 'bottom-right', rect: { x: x + width - halfHandleSize, y: y + height - halfHandleSize, width: handleSize, height: handleSize }, cursor: 'nwse-resize' },
-    ];
-};
 
 const isPointInRect = (point: Point, rect: Rect) => {
     return point.x >= rect.x && point.x <= rect.x + rect.width &&
