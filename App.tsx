@@ -611,111 +611,6 @@ const App: React.FC = () => {
 
   }, [cropArea, images, groups, canvasAnnotations, selectedImageIds, exportFormat, pushHistory]);
 
-  // Copy/Paste Annotations & Global Shortcuts
-  useEffect(() => {
-      const handleKeyDown = (e: KeyboardEvent) => {
-          const target = e.target as HTMLElement;
-          const isEditingText = ['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable;
-          if (isEditingText) return;
-
-          const isCtrlOrMeta = e.ctrlKey || e.metaKey;
-
-          // Undo: Ctrl+Z
-          if (isCtrlOrMeta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-              e.preventDefault();
-              handleUndo();
-              return;
-          }
-
-          // Redo: Ctrl+Y or Ctrl+Shift+Z
-          if (isCtrlOrMeta && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
-              e.preventDefault();
-              handleRedo();
-              return;
-          }
-
-          // Copy
-          if (isCtrlOrMeta && e.key.toLowerCase() === 'c') {
-              if (selectedAnnotations.length > 0) {
-                  setClipboard({ selections: selectedAnnotations });
-              }
-          }
-          
-          // Apply Crop (Enter)
-          if (e.key === 'Enter' && cropArea) {
-              e.preventDefault();
-              handleCrop();
-              return;
-          }
-
-          // Paste
-          if (isCtrlOrMeta && e.key.toLowerCase() === 'v') {
-              if (clipboard && clipboard.selections.length > 0) {
-                  e.preventDefault();
-                  
-                  const newAnnotations: Annotation[] = [];
-                  const newCanvasAnnotations = [...canvasAnnotations];
-                  const nextImages = [...images];
-
-                  const selectionsToSelect: AnnotationSelection[] = [];
-
-                  // Helper to offset and create new ID
-                  const cloneAnno = (anno: Annotation) => {
-                      const copy = JSON.parse(JSON.stringify(anno)) as Annotation;
-                      copy.id = `anno-${Date.now()}-${Math.random()}`;
-                      // Offset slightly
-                      if (copy.type === 'line' || copy.type === 'arrow') {
-                          copy.start.x += 20; copy.start.y += 20;
-                          copy.end.x += 20; copy.end.y += 20;
-                      } else if (copy.type === 'freehand') {
-                          copy.points = copy.points.map(p => ({ x: p.x + 20, y: p.y + 20 }));
-                      } else {
-                          (copy as any).x += 20; (copy as any).y += 20;
-                      }
-                      return copy;
-                  };
-
-                  clipboard.selections.forEach(sel => {
-                      if (sel.imageId) {
-                          const imgIndex = nextImages.findIndex(i => i.id === sel.imageId);
-                          if (imgIndex !== -1) {
-                              const sourceAnno = nextImages[imgIndex].annotations.find(a => a.id === sel.annotationId);
-                              if (sourceAnno) {
-                                  const newAnno = cloneAnno(sourceAnno);
-                                  // Important: Create a NEW images array reference for the update
-                                  const updatedImage = { ...nextImages[imgIndex], annotations: [...nextImages[imgIndex].annotations, newAnno] };
-                                  nextImages[imgIndex] = updatedImage;
-                                  selectionsToSelect.push({ imageId: sel.imageId, annotationId: newAnno.id });
-                              }
-                          }
-                      } else {
-                          const sourceAnno = canvasAnnotations.find(a => a.id === sel.annotationId);
-                          if (sourceAnno) {
-                              const newAnno = cloneAnno(sourceAnno);
-                              newCanvasAnnotations.push(newAnno);
-                              selectionsToSelect.push({ imageId: null, annotationId: newAnno.id });
-                          }
-                      }
-                  });
-
-                  pushHistory({ images: nextImages, groups, canvasAnnotations: newCanvasAnnotations });
-                  setAppState(prev => ({ ...prev, selectedAnnotations: selectionsToSelect, selectedImageIds: [] }));
-              }
-          }
-
-          // Shortcuts
-          if (e.key.toLowerCase() === 's' && !e.repeat && !isCtrlOrMeta) {
-            setActiveTool('select');
-          }
-          if (e.key.toLowerCase() === 'i' && !e.repeat && !isCtrlOrMeta) {
-            setActiveTool('eyedropper');
-          }
-      };
-
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedAnnotations, clipboard, images, groups, canvasAnnotations, pushHistory, handleUndo, handleRedo, handleCrop, cropArea]);
-
   const handleUncrop = useCallback((imageIds: string[]) => {
       const idsToUncrop = new Set(imageIds);
       const newSelection: string[] = [];
@@ -2298,6 +2193,135 @@ const App: React.FC = () => {
     // This is UI state and should probably not create history, but we follow the pattern for now
     pushHistory({ images, groups: nextGroups, canvasAnnotations });
   }, [pushHistory, images, groups, canvasAnnotations]);
+
+
+  // Global Shortcuts (Moved to end to ensure all handlers are defined)
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          const target = e.target as HTMLElement;
+          const isEditingText = ['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable;
+          if (isEditingText) return;
+
+          const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+
+          // Undo: Ctrl+Z
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+              e.preventDefault();
+              handleUndo();
+              return;
+          }
+
+          // Redo: Ctrl+Y or Ctrl+Shift+Z
+          if (isCtrlOrMeta && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+              e.preventDefault();
+              handleRedo();
+              return;
+          }
+
+          // Copy
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'c') {
+              if (selectedAnnotations.length > 0) {
+                  setClipboard({ selections: selectedAnnotations });
+              }
+          }
+          
+          // Apply Crop (Enter)
+          if (e.key === 'Enter' && cropArea) {
+              e.preventDefault();
+              handleCrop();
+              return;
+          }
+
+          // Paste
+          if (isCtrlOrMeta && e.key.toLowerCase() === 'v') {
+              if (clipboard && clipboard.selections.length > 0) {
+                  e.preventDefault();
+                  
+                  const newAnnotations: Annotation[] = [];
+                  const newCanvasAnnotations = [...canvasAnnotations];
+                  const nextImages = [...images];
+
+                  const selectionsToSelect: AnnotationSelection[] = [];
+
+                  // Helper to offset and create new ID
+                  const cloneAnno = (anno: Annotation) => {
+                      const copy = JSON.parse(JSON.stringify(anno)) as Annotation;
+                      copy.id = `anno-${Date.now()}-${Math.random()}`;
+                      // Offset slightly
+                      if (copy.type === 'line' || copy.type === 'arrow') {
+                          copy.start.x += 20; copy.start.y += 20;
+                          copy.end.x += 20; copy.end.y += 20;
+                      } else if (copy.type === 'freehand') {
+                          copy.points = copy.points.map(p => ({ x: p.x + 20, y: p.y + 20 }));
+                      } else {
+                          (copy as any).x += 20; (copy as any).y += 20;
+                      }
+                      return copy;
+                  };
+
+                  clipboard.selections.forEach(sel => {
+                      if (sel.imageId) {
+                          const imgIndex = nextImages.findIndex(i => i.id === sel.imageId);
+                          if (imgIndex !== -1) {
+                              const sourceAnno = nextImages[imgIndex].annotations.find(a => a.id === sel.annotationId);
+                              if (sourceAnno) {
+                                  const newAnno = cloneAnno(sourceAnno);
+                                  // Important: Create a NEW images array reference for the update
+                                  const updatedImage = { ...nextImages[imgIndex], annotations: [...nextImages[imgIndex].annotations, newAnno] };
+                                  nextImages[imgIndex] = updatedImage;
+                                  selectionsToSelect.push({ imageId: sel.imageId, annotationId: newAnno.id });
+                              }
+                          }
+                      } else {
+                          const sourceAnno = canvasAnnotations.find(a => a.id === sel.annotationId);
+                          if (sourceAnno) {
+                              const newAnno = cloneAnno(sourceAnno);
+                              newCanvasAnnotations.push(newAnno);
+                              selectionsToSelect.push({ imageId: null, annotationId: newAnno.id });
+                          }
+                      }
+                  });
+
+                  pushHistory({ images: nextImages, groups, canvasAnnotations: newCanvasAnnotations });
+                  setAppState(prev => ({ ...prev, selectedAnnotations: selectionsToSelect, selectedImageIds: [] }));
+              }
+          }
+
+          // Delete
+          if (e.key === 'Delete' || e.key === 'Backspace') {
+              e.preventDefault();
+              if (selectedAnnotations.length > 0) {
+                  deleteSelectedAnnotations();
+              } else if (selectedImageIds.length > 0) {
+                   const newImages = images.filter(img => !selectedImageIds.includes(img.id));
+                   const newGroups = groups.map(g => ({
+                       ...g,
+                       imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id))
+                   })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
+                   
+                   pushHistory({ images: newImages, groups: newGroups, canvasAnnotations });
+                   setAppState(prev => ({ ...prev, selectedImageIds: [], selectedLayerId: null }));
+              } else if (selectedLayerId) {
+                   const group = groups.find(g => g.id === selectedLayerId);
+                   if (group) {
+                       deleteGroup(selectedLayerId);
+                       setAppState(prev => ({ ...prev, selectedLayerId: null }));
+                   }
+              }
+          }
+
+          // Shortcuts
+          if (e.key.toLowerCase() === 's' && !e.repeat && !isCtrlOrMeta) {
+            setActiveTool('select');
+          }
+          if (e.key.toLowerCase() === 'i' && !e.repeat && !isCtrlOrMeta) {
+            setActiveTool('eyedropper');
+          }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedAnnotations, clipboard, images, groups, canvasAnnotations, pushHistory, handleUndo, handleRedo, handleCrop, cropArea, selectedImageIds, selectedLayerId, deleteSelectedAnnotations, deleteGroup, setActiveTool, setClipboard]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-gray-900 text-white">
