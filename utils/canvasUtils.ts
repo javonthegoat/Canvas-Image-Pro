@@ -176,18 +176,22 @@ export function getAnnotationPrimitiveBounds(annotation: Annotation, ctx: Canvas
                 width: annotation.radius * 2,
                 height: annotation.radius * 2,
             };
-        case 'text':
+        case 'text': {
              ctx.save();
              ctx.font = `${annotation.fontSize}px ${annotation.fontFamily}`;
-             const metrics = ctx.measureText(annotation.text);
-             const height = annotation.fontSize;
+             const lines = annotation.text.split('\n');
+             const lineHeight = annotation.fontSize * 1.2;
+             const widths = lines.map(line => ctx.measureText(line).width);
+             const maxWidth = Math.max(0, ...widths);
+             const height = lineHeight * lines.length;
              ctx.restore();
              return {
                 x: annotation.x,
                 y: annotation.y,
-                width: metrics.width,
+                width: maxWidth,
                 height: height,
              };
+        }
         case 'arrow':
         case 'line':
              const minX = Math.min(annotation.start.x, annotation.end.x);
@@ -286,10 +290,11 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
             const lines = annotation.text.split('\n');
             const lineHeight = annotation.fontSize * 1.2;
             
-            if (annotation.backgroundColor) {
-                 const metrics = ctx.measureText(annotation.text);
+            if (annotation.backgroundColor && annotation.backgroundOpacity > 0) {
+                 const widths = lines.map(line => ctx.measureText(line).width);
+                 const maxWidth = Math.max(0, ...widths);
                  ctx.fillStyle = hexToRgba(annotation.backgroundColor, annotation.backgroundOpacity ?? 1);
-                 ctx.fillRect(annotation.x, annotation.y, metrics.width, lineHeight * lines.length);
+                 ctx.fillRect(annotation.x, annotation.y, maxWidth, lineHeight * lines.length);
             }
 
             ctx.fillStyle = annotation.color;

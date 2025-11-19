@@ -507,7 +507,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       }
     }
 
-    if (activeTool !== 'select' && activeTool !== 'eyedropper') {
+    // FIX: Removed redundant check for 'eyedropper' since it's handled at the start of the function.
+    if (activeTool !== 'select') {
       let targetImage: CanvasImage | undefined;
       if (selectedImageIds.length === 1) {
         targetImage = images.find(img => img.id === selectedImageIds[0]);

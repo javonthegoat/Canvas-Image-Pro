@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+// FIX: Corrected import paths for being inside src/ directory
 import { LeftSidebar } from '../components/LeftSidebar';
 import { LayersPanel } from '../components/LayersPanel';
 import { CanvasWrapper } from '../components/CanvasWrapper';
@@ -2189,3 +2190,146 @@ const App: React.FC = () => {
         onStackImages={stackImages}
         onMatchImageSizes={matchImageSizes}
         exportFormat={exportFormat}
+        setExportFormat={setExportFormat}
+        onFitCropToImage={handleFitCropToImage}
+        onClearAllCanvas={handleClearAllCanvas}
+        onDownloadAllCanvas={handleDownloadAllCanvas}
+        onUncrop={handleUncrop}
+        onSaveProject={handleSaveProject}
+        onLoadProject={handleLoadProject}
+        onCreateGroup={createGroupFromSelection}
+        images={images}
+        onDownloadSelectedImages={handleDownloadSelectedImages}
+        isDirty={isDirty}
+      />
+      
+      <div className="flex-1 relative bg-gray-800 overflow-hidden" ref={canvasContainerRef}>
+         <CanvasWrapper
+            ref={canvasRef}
+            images={images}
+            groups={groups}
+            setImages={setImagesForInteraction}
+            onInteractionEnd={commitInteraction}
+            selectedImageIds={selectedImageIds}
+            setSelectedImageId={(id, opts) => id ? handleSelectLayer(id, 'image', opts) : handleSelectImages([], false)}
+            onSelectImages={handleSelectImages}
+            onBoxSelect={handleBoxSelect}
+            cropArea={cropArea}
+            setCropArea={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.cropArea) : updater;
+                    return { ...prev, cropArea: newVal };
+                });
+            }}
+            aspectRatio={aspectRatio}
+            activeTool={activeTool}
+            setActiveTool={setActiveTool}
+            toolOptions={toolOptions}
+            addAnnotation={addAnnotation}
+            deleteSelectedAnnotations={deleteSelectedAnnotations}
+            viewTransform={viewTransform}
+            setViewTransform={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.viewTransform) : updater;
+                    return { ...prev, viewTransform: newVal };
+                });
+            }}
+            selectedAnnotations={selectedAnnotations}
+            setSelectedAnnotations={handleSetSelectedAnnotations}
+            updateAnnotation={updateSelectedAnnotationsForInteraction}
+            updateMultipleAnnotationsForInteraction={updateMultipleAnnotationsForInteraction}
+            selectedAnnotationObjects={selectedAnnotationObjects}
+            onColorPicked={handleColorPicked}
+            canvasAnnotations={canvasAnnotations}
+            addCanvasAnnotation={addCanvasAnnotation}
+            onMoveCanvasAnnotations={handleMoveCanvasAnnotations}
+            onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
+            reparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
+            onMoveSelectedImages={handleMoveSelectedImages}
+            lastCanvasMousePosition={lastCanvasMousePosition}
+            onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
+            selectedLayerId={selectedLayerId}
+         />
+         <div style={floatingEditorPosition}>
+            <FloatingAnnotationEditor
+              ref={floatingEditorRef}
+              style={{}}
+              selectedAnnotations={selectedAnnotationObjects}
+              onUpdate={updateSelectedAnnotationsForInteraction}
+              onDelete={deleteSelectedAnnotations}
+            />
+         </div>
+         
+         <MiniMap 
+             images={images} 
+             viewTransform={viewTransform} 
+             setViewTransform={(updater) => {
+                setAppState(prev => {
+                    const newVal = typeof updater === 'function' ? (updater as any)(prev.viewTransform) : updater;
+                    return { ...prev, viewTransform: newVal };
+                });
+             }}
+             viewportSize={{ width: windowSize.width - 320 - 256, height: windowSize.height }}
+             groups={groups}
+         />
+      </div>
+      <LayersPanel
+        images={images}
+        visualLayerOrder={visualLayerOrder}
+        onRenameImage={renameCanvasImage}
+        onSelectLayer={handleSelectLayer}
+        onCenterOnLayer={handleCenterOnLayer}
+        onSelectImages={handleSelectImages}
+        onDeleteImage={deleteImage}
+        onReorderTopLevelLayer={reorderTopLevelLayer}
+        onReorderLayer={handleReorderLayer}
+        selectedAnnotations={selectedAnnotations}
+        onSelectAnnotation={handleSelectAnnotation}
+        groups={groups}
+        onDeleteGroup={deleteGroup}
+        onRenameGroup={renameGroup}
+        onToggleGroupExpanded={toggleGroupExpanded}
+        onAddImageToGroup={addImageToGroup}
+        onUngroupImages={(ids) => {
+            const imageToUngroup = ids[0];
+            const oldGroup = groups.find(g => g.imageIds.includes(imageToUngroup));
+            if (oldGroup) {
+                const updatedGroups = groups.map(g => 
+                    g.id === oldGroup.id ? { ...g, imageIds: g.imageIds.filter(id => id !== imageToUngroup) } : g
+                );
+                pushHistory({ images, groups: updatedGroups, canvasAnnotations });
+            }
+        }}
+        canvasAnnotations={canvasAnnotations}
+        onReparentCanvasAnnotationsToImage={reparentCanvasAnnotationsToImage}
+        onReparentImageAnnotationsToCanvas={reparentImageAnnotationsToCanvas}
+        selectedImageIds={selectedImageIds}
+        selectedLayerId={selectedLayerId}
+        parentImageIds={new Set()}
+        expandedImageAnnotationIds={expandedImageAnnotationIds}
+        onToggleImageAnnotationsExpanded={toggleImageAnnotationsExpanded}
+        onReparentGroup={reparentGroup}
+        onRenameGroupLabel={renameGroupLabel}
+        onToggleGroupLabel={toggleGroupLabel}
+        onReverseLayerOrder={handleReverseLayerOrder}
+        onAddTag={(imageId, tag) => {
+            const newImages = images.map(img => img.id === imageId ? { ...img, tags: [...(img.tags || []), tag] } : img);
+            pushHistory({ images: newImages, groups, canvasAnnotations });
+        }}
+        onRemoveTag={(imageId, tagIndex) => {
+            const newImages = images.map(img => {
+                if (img.id === imageId && img.tags) {
+                    const newTags = [...img.tags];
+                    newTags.splice(tagIndex, 1);
+                    return { ...img, tags: newTags };
+                }
+                return img;
+            });
+            pushHistory({ images: newImages, groups, canvasAnnotations });
+        }}
+      />
+    </div>
+  );
+};
+
+export default App;
