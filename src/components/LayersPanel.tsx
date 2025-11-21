@@ -245,7 +245,7 @@ const GroupItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder'> & { group: 
     );
 };
 
-export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
+const LayersPanel: React.FC<LayersPanelProps> = (props) => {
     const { canvasAnnotations, visualLayerOrder, selectedAnnotations, onSelectAnnotation, onReparentImageAnnotationsToCanvas } = props;
 
     const handleCanvasDrop = (e: React.DragEvent) => {
@@ -302,3 +302,5 @@ export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
         </aside>
     );
 };
+// FIX: Changed from named to default export to resolve import error in App.tsx.
+export default LayersPanel;

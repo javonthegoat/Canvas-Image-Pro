@@ -1,7 +1,9 @@
+
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, AspectRatio, AnnotationTool, Rect, Annotation, TextAnnotation, Group } from '../types';
 import { UploadIcon, ZoomInIcon, ZoomOutIcon, RotateCwIcon, CropIcon, PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, UndoIcon, RedoIcon, ArrowIcon, XIcon, SendToBackIcon, ChevronDownIcon, ChevronUpIcon, BringToFrontIcon, AlignLeftIcon, AlignHorizontalCenterIcon, AlignRightIcon, AlignTopIcon, AlignVerticalCenterIcon, AlignBottomIcon, CopyIcon, DownloadIcon, LineIcon, ArrangeHorizontalIcon, ArrangeVerticalIcon, EyedropperIcon, MaximizeIcon, SaveIcon, FolderOpenIcon, LayersIcon, DistributeHorizontalIcon, DistributeVerticalIcon, MatchWidthIcon, MatchHeightIcon, StackHorizontalIcon, StackVerticalIcon, SlidersIcon } from './icons';
-import { ColorInput } from './ColorInput';
+import { ColorPicker } from './ColorInput';
 
 interface LeftSidebarProps {
   onFileChange: (files: FileList | null) => void;
@@ -21,8 +23,8 @@ interface LeftSidebarProps {
   canUndo: boolean;
   canRedo: boolean;
   onAlignImages: (alignment: 'left' | 'h-center' | 'right' | 'top' | 'v-center' | 'bottom') => void;
-  onArrangeImages: (direction: 'horizontal' | 'vertical') => void;
-  onStackImages: (direction: 'horizontal' | 'vertical') => void;
+  onArrangeImages: (direction: 'horizontal' | 'vertical', order: 'normal' | 'reverse') => void;
+  onStackImages: (direction: 'horizontal' | 'vertical', order: 'normal' | 'reverse') => void;
   onMatchImageSizes: (dimension: 'width' | 'height') => void;
   exportFormat: 'png' | 'jpeg';
   setExportFormat: (format: 'png' | 'jpeg') => void;
@@ -37,6 +39,10 @@ interface LeftSidebarProps {
   images: CanvasImage[];
   onDownloadSelectedImages: () => void;
   isDirty: boolean;
+  selectedAnnotationObjects: Annotation[];
+  onUpdateSelectedAnnotations: (changes: Partial<Annotation>) => void;
+  deleteSelectedAnnotations: () => void;
+  onCrop: () => void;
 }
 
 const TabButton: React.FC<{
@@ -70,6 +76,7 @@ const Accordion: React.FC<{ title: string; children: React.ReactNode; defaultOpe
     </details>
 );
 
+type ColorTarget = 'stroke' | 'fill' | 'outline' | 'bg';
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const {
@@ -79,6 +86,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
     onAlignImages, onArrangeImages, onStackImages, onMatchImageSizes, exportFormat, setExportFormat, onFitCropToImage,
     isLocked, onClearAllCanvas, onDownloadAllCanvas, onUncrop,
     onSaveProject, onLoadProject, onCreateGroup, images, onDownloadSelectedImages, isDirty,
+    selectedAnnotationObjects, onUpdateSelectedAnnotations, deleteSelectedAnnotations, onCrop
   } = props;
 
   const [activeTab, setActiveTab] = useState<'tools' | 'project'>('tools');
@@ -86,6 +94,103 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const loadProjectInputRef = useRef<HTMLInputElement>(null);
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
   const confirmTimeoutRef = useRef<number | null>(null);
+  const [activeColorTarget, setActiveColorTarget] = useState<ColorTarget>('stroke');
+  const [lastArrangeClick, setLastArrangeClick] = useState({ time: 0, direction: '' });
+  const [lastStackClick, setLastStackClick] = useState({ time: 0, direction: '' });
+
+  const isEditingAnnotation = selectedAnnotationObjects.length > 0;
+  const isEditingImage = selectedImageIds.length > 0;
+  
+  const isText = activeTool === 'text' || (isEditingAnnotation && selectedAnnotationObjects.some(a => a.type === 'text'));
+
+  // Helper to get common props for selection or active tool defaults
+  const currentProps = useMemo(() => {
+      if (isEditingAnnotation) {
+          if (selectedAnnotationObjects.length === 0) return {};
+          const first = selectedAnnotationObjects[0];
+          const common: any = { ...first };
+          
+          for (let i = 1; i < selectedAnnotationObjects.length; i++) {
+              const current = selectedAnnotationObjects[i] as any;
+              Object.keys(common).forEach(key => {
+                  if (current[key] !== common[key]) common[key] = 'multi';
+              });
+          }
+          return common;
+      } else {
+          // Tool Defaults
+          return toolOptions;
+      }
+  }, [isEditingAnnotation, selectedAnnotationObjects, toolOptions]);
+
+  const commonImageProps = useMemo(() => {
+      if (!isEditingImage) return null;
+      const selected = images.filter(img => selectedImageIds.includes(img.id));
+      if (selected.length === 0) return null;
+  
+      const first = selected[0];
+      const common: {
+          outlineColor: string | 'multi';
+          outlineWidth: number | 'multi';
+          outlineOpacity: number | 'multi';
+      } = {
+          outlineColor: first.outlineColor ?? '#000000',
+          outlineWidth: first.outlineWidth ?? 0,
+          outlineOpacity: first.outlineOpacity ?? 1,
+      };
+  
+      for (let i = 1; i < selected.length; i++) {
+          if ((selected[i].outlineColor ?? '#000000') !== common.outlineColor) {
+              common.outlineColor = 'multi';
+          }
+          if ((selected[i].outlineWidth ?? 0) !== common.outlineWidth) {
+              common.outlineWidth = 'multi';
+          }
+          if ((selected[i].outlineOpacity ?? 1) !== common.outlineOpacity) {
+              common.outlineOpacity = 'multi';
+          }
+      }
+      return common;
+    }, [selectedImageIds, images, isEditingImage]);
+
+
+  // Determine which color targets are available based on context
+  const getAvailableColorTargets = (): ColorTarget[] => {
+      const targets = new Set<ColorTarget>();
+
+      // Annotation Editing
+      if (isEditingAnnotation) {
+          const types = selectedAnnotationObjects.map(a => a.type);
+          targets.add('stroke');
+          if (types.some(t => ['rect', 'circle'].includes(t))) targets.add('fill');
+          if (types.some(t => t === 'text')) { targets.add('bg'); targets.add('outline'); }
+          if (types.some(t => ['freehand', 'arrow', 'line'].includes(t))) targets.add('outline');
+      } 
+      // Image Editing
+      else if (isEditingImage) {
+          targets.add('outline');
+      }
+      // Active Tool
+      else {
+          targets.add('stroke');
+          if (['rect', 'circle'].includes(activeTool)) targets.add('fill');
+          if (activeTool === 'text') { targets.add('bg'); targets.add('outline'); }
+          if (['freehand', 'arrow', 'line'].includes(activeTool)) targets.add('outline');
+      }
+
+      const order: ColorTarget[] = ['stroke', 'fill', 'bg', 'outline'];
+      const result = order.filter(t => targets.has(t));
+      return result.length > 0 ? result : ['stroke'];
+  };
+
+  const availableColorTargets = getAvailableColorTargets();
+
+  // Ensure valid color target when selection/tool changes
+  useEffect(() => {
+      if (!availableColorTargets.includes(activeColorTarget)) {
+          setActiveColorTarget(availableColorTargets[0] as ColorTarget);
+      }
+  }, [activeTool, selectedAnnotationObjects, selectedImageIds, activeColorTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
       return () => {
@@ -143,10 +248,25 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
     }
   };
   
+  const handleArrangeClick = (direction: 'horizontal' | 'vertical') => {
+    const now = Date.now();
+    const isDoubleClick = now - lastArrangeClick.time < 300 && lastArrangeClick.direction === direction;
+    onArrangeImages(direction, isDoubleClick ? 'reverse' : 'normal');
+    setLastArrangeClick({ time: now, direction });
+  };
+
+  const handleStackClick = (direction: 'horizontal' | 'vertical') => {
+    const now = Date.now();
+    const isDoubleClick = now - lastStackClick.time < 300 && lastStackClick.direction === direction;
+    onStackImages(direction, isDoubleClick ? 'reverse' : 'normal');
+    setLastStackClick({ time: now, direction });
+  };
+  
   const aspectRatios: AspectRatio[] = ['free', '1:1', '4:3', '16:9'];
   const tools: { name: AnnotationTool, icon: React.ReactNode, title: string }[] = [
     { name: 'select', icon: <MousePointerIcon />, title: 'Select & Move (S)' },
     { name: 'eyedropper', icon: <EyedropperIcon />, title: 'Eyedropper (I)' },
+    { name: 'crop', icon: <CropIcon />, title: 'Crop Tool (C)' },
     { name: 'line', icon: <LineIcon />, title: 'Draw Line' },
     { name: 'arrow', icon: <ArrowIcon />, title: 'Draw Arrow' },
     { name: 'freehand', icon: <PenToolIcon />, title: 'Freehand Draw' },
@@ -164,30 +284,88 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const isDisabled = isLocked;
   const showUncrop = selectedImageIds.length > 0 && images.some(img => selectedImageIds.includes(img.id) && img.uncroppedFromId);
 
-  const commonImageProps = useMemo(() => {
-    if (selectedImageIds.length === 0) return null;
-    const selected = images.filter(img => selectedImageIds.includes(img.id));
-    if (selected.length === 0) return null;
+  const getActiveColorValue = (): string => {
+      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation) {
+          return commonImageProps?.outlineColor === 'multi' ? '#ffffff' : (commonImageProps?.outlineColor || '#000000');
+      }
 
-    const first = selected[0];
-    const common: {
-        outlineColor: string | 'multi';
-        outlineWidth: number | 'multi';
-    } = {
-        outlineColor: first.outlineColor ?? '#000000',
-        outlineWidth: first.outlineWidth ?? 0,
-    };
+      const val = (() => {
+          switch(activeColorTarget) {
+              case 'stroke': return currentProps.color;
+              case 'fill': return currentProps.fillColor;
+              case 'bg': return currentProps.backgroundColor;
+              case 'outline': 
+                  if (isText) return currentProps.strokeColor;
+                  return currentProps.outlineColor;
+              default: return '#000000';
+          }
+      })();
+      return val === 'multi' ? '#ffffff' : (val || '#000000');
+  };
 
-    for (let i = 1; i < selected.length; i++) {
-        if ((selected[i].outlineColor ?? '#000000') !== common.outlineColor) {
-            common.outlineColor = 'multi';
-        }
-        if ((selected[i].outlineWidth ?? 0) !== common.outlineWidth) {
-            common.outlineWidth = 'multi';
-        }
-    }
-    return common;
-  }, [selectedImageIds, images]);
+  const getOpacityField = (target: ColorTarget): string | undefined => {
+      switch(target) {
+          case 'bg': return 'backgroundOpacity';
+          case 'fill': return 'fillOpacity';
+          case 'outline': 
+              if (isText) return 'strokeOpacity';
+              return 'outlineOpacity';
+          case 'stroke':
+            
+              return undefined; 
+          default: return undefined;
+      }
+  };
+
+  const handleColorChange = (newColor: string) => {
+      const changes: any = {};
+
+      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation) {
+          onUpdateSelectedImages({ outlineColor: newColor });
+          return;
+      }
+
+      switch(activeColorTarget) {
+          case 'stroke': changes.color = newColor; break;
+          case 'fill': changes.fillColor = newColor; break;
+          case 'bg': changes.backgroundColor = newColor; break;
+          case 'outline': 
+              if (isText) {
+                   changes.strokeColor = newColor; 
+              } else {
+                   changes.outlineColor = newColor;
+              }
+              break;
+      }
+
+      if (isEditingAnnotation) {
+          onUpdateSelectedAnnotations(changes);
+      } else {
+          setToolOptions((prev: any) => ({ ...prev, ...changes }));
+      }
+  };
+
+  const renderColorTargetButtons = () => (
+      <div className="flex bg-gray-800 rounded-md p-1 space-x-1 mb-3 overflow-x-auto scrollbar-hide">
+          {availableColorTargets.map(target => {
+              let label = '';
+              if (target === 'stroke') label = isText ? 'Text' : 'Stroke';
+              else if (target === 'fill') label = 'Fill';
+              else if (target === 'bg') label = 'BG';
+              else if (target === 'outline') label = isText ? 'Stroke' : 'Outline';
+              
+              return (
+                  <button
+                      key={target}
+                      onClick={() => setActiveColorTarget(target)}
+                      className={`flex-1 px-2 py-1 text-xs rounded-sm transition-colors whitespace-nowrap ${activeColorTarget === target ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                  >
+                      {label}
+                  </button>
+              );
+          })}
+      </div>
+  );
 
   return (
     <aside className={`w-80 bg-gray-900 text-gray-300 flex flex-col h-full shadow-lg z-10 border-r border-gray-700 transition-opacity duration-300 ${isDisabled ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -214,117 +392,221 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
       
       <div className="flex-grow overflow-y-auto">
         {activeTab === 'tools' && (
-            <div className="p-4 space-y-4">
-                <Accordion title="Annotation Tools" defaultOpen>
-                  <div className="grid grid-cols-4 gap-2">
+            <div className="p-4 space-y-6">
+                {/* Tool Selection Grid */}
+                <div className="grid grid-cols-4 gap-2">
                     {tools.map(tool => (
-                      <button
-                        key={tool.name}
-                        title={tool.title}
-                        onClick={() => setActiveTool(tool.name)}
-                        disabled={isDisabled}
-                        className={`p-2 flex justify-center items-center rounded-md transition-colors ${activeTool === tool.name ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'} disabled:bg-gray-800 disabled:cursor-not-allowed`}
-                      >
-                        {tool.icon}
-                      </button>
+                        <button
+                            key={tool.name}
+                            title={tool.title}
+                            onClick={() => {
+                                setActiveTool(tool.name);
+                            }}
+                            disabled={isDisabled || (isEditingAnnotation && tool.name !== 'select')}
+                            className={`p-2 flex justify-center items-center rounded-md transition-colors ${activeTool === tool.name && !isEditingAnnotation ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                            {tool.icon}
+                        </button>
                     ))}
-                  </div>
-                   {activeTool !== 'select' && activeTool !== 'eyedropper' && (
-                    <div className="space-y-3 pt-2 border-t border-gray-800">
-                       <ColorInput
-                          label={activeTool === 'text' ? 'Text Color' : 'Stroke/Line Color'}
-                          color={toolOptions.color}
-                          onChange={newColor => setToolOptions((prev: any) => ({ ...prev, color: newColor }))}
-                        />
-
-                      {activeTool !== 'text' && (
-                        <div>
-                          <label htmlFor="stroke-width" className="block text-sm font-medium mb-1">Stroke/Line Width ({toolOptions.strokeWidth}px)</label>
-                          <input id="stroke-width" type="range" min="0" max="50" value={toolOptions.strokeWidth} onChange={e => setToolOptions((prev: any) => ({ ...prev, strokeWidth: parseInt(e.target.value, 10) }))} className="w-full" />
-                        </div>
-                      )}
-
-                      {(activeTool === 'rect' || activeTool === 'circle') && (
-                        <div className="space-y-3 pt-2 border-t border-gray-800">
-                          <h3 className="text-sm font-medium">Fill</h3>
-                          <ColorInput
-                            label="Color"
-                            color={toolOptions.fillColor}
-                            onChange={newColor => setToolOptions((prev: any) => ({ ...prev, fillColor: newColor }))}
-                          />
-                          <div>
-                            <label className="block text-sm font-medium mb-1">Opacity</label>
-                            <input id="fill-opacity" type="range" min="0" max="1" step="0.1" value={toolOptions.fillOpacity} onChange={e => setToolOptions((prev: any) => ({ ...prev, fillOpacity: parseFloat(e.target.value) }))} className="w-full" title={`Opacity: ${toolOptions.fillOpacity}`} />
-                          </div>
-                        </div>
-                      )}
-
-                      {(activeTool === 'freehand' || activeTool === 'arrow' || activeTool === 'line') && (
-                         <div className="space-y-3 pt-2 border-t border-gray-800">
-                          <h3 className="text-sm font-medium">Outline</h3>
-                           <ColorInput
-                            label="Color"
-                            color={toolOptions.outlineColor}
-                            onChange={newColor => setToolOptions((prev: any) => ({ ...prev, outlineColor: newColor }))}
-                          />
-                          <div>
-                            <label className="block text-sm font-medium mb-1">Opacity</label>
-                            <input id="outline-opacity" type="range" min="0" max="1" step="0.1" value={toolOptions.outlineOpacity} onChange={e => setToolOptions((prev: any) => ({ ...prev, outlineOpacity: parseFloat(e.target.value) }))} className="w-full" title={`Opacity: ${toolOptions.outlineOpacity}`} />
-                          </div>
-                          <div>
-                            <label htmlFor="outline-width" className="block text-sm font-medium mb-1">Width ({toolOptions.outlineWidth}px)</label>
-                            <input id="outline-width" type="range" min="0" max="50" value={toolOptions.outlineWidth} onChange={e => setToolOptions((prev: any) => ({ ...prev, outlineWidth: parseInt(e.target.value, 10) }))} className="w-full" />
-                          </div>
-                        </div>
-                      )}
-
-                      {activeTool === 'text' && (
-                        <>
-                          <div>
-                            <label htmlFor="font-size" className="block text-sm font-medium mb-1">Font Size ({toolOptions.fontSize}px)</label>
-                            <input id="font-size" type="range" min="8" max="128" value={toolOptions.fontSize} onChange={e => setToolOptions((prev: any) => ({ ...prev, fontSize: parseInt(e.target.value, 10) }))} className="w-full" />
-                          </div>
-                          <div>
-                            <label htmlFor="font-family" className="block text-sm font-medium mb-1">Font Family</label>
-                            <select id="font-family" value={toolOptions.fontFamily} onChange={e => setToolOptions((prev: any) => ({ ...prev, fontFamily: e.target.value }))} className="w-full bg-gray-800 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500">
-                              <option>Arial</option><option>Verdana</option><option>Times New Roman</option><option>Courier New</option><option>Comic Sans MS</option>
-                            </select>
-                          </div>
-                          <div className="space-y-3 pt-2 border-t border-gray-800">
-                            <h3 className="text-sm font-medium">Background</h3>
-                            <ColorInput
-                              label="Color"
-                              color={toolOptions.backgroundColor}
-                              onChange={newColor => setToolOptions((prev: any) => ({ ...prev, backgroundColor: newColor }))}
-                            />
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Opacity</label>
-                              <input id="bg-opacity" type="range" min="0" max="1" step="0.1" value={toolOptions.backgroundOpacity} onChange={e => setToolOptions((prev: any) => ({ ...prev, backgroundOpacity: parseFloat(e.target.value) }))} className="w-full" title={`Opacity: ${toolOptions.backgroundOpacity}`} />
+                </div>
+                
+                {/* Crop Tool Options */}
+                {activeTool === 'crop' && (
+                    <div className="space-y-4 bg-gray-800 p-3 rounded-md border border-gray-700">
+                         <h3 className="text-xs font-bold text-gray-100 uppercase tracking-wide">Crop Options</h3>
+                         <p className="text-xs text-gray-400">Drag to crop. Press Enter to Apply.</p>
+                         <div>
+                            <label className="block text-sm font-medium mb-1">Aspect Ratio</label>
+                            <div className="grid grid-cols-2 gap-2">
+                            {aspectRatios.map(r => (
+                                <button key={r} onClick={() => setAspectRatio(r)} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${aspectRatio === r ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{r}</button>
+                            ))}
                             </div>
-                          </div>
-                           <div className="space-y-3 pt-2 border-t border-gray-800">
-                            <h3 className="text-sm font-medium">Stroke</h3>
-                             <ColorInput
-                              label="Color"
-                              color={toolOptions.strokeColor}
-                              onChange={newColor => setToolOptions((prev: any) => ({ ...prev, strokeColor: newColor }))}
-                            />
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Opacity</label>
-                              <input id="stroke-opacity" type="range" min="0" max="1" step="0.1" value={toolOptions.strokeOpacity} onChange={e => setToolOptions((prev: any) => ({ ...prev, strokeOpacity: parseFloat(e.target.value) }))} className="w-full" title={`Opacity: ${toolOptions.strokeOpacity}`} />
-                            </div>
-                             <div>
-                              <label htmlFor="stroke-width-text" className="block text-sm font-medium mb-1">Thickness ({toolOptions.strokeWidth}px)</label>
-                              <input id="stroke-width-text" type="range" min="0" max="20" value={toolOptions.strokeWidth} onChange={e => setToolOptions((prev: any) => ({ ...prev, strokeWidth: parseInt(e.target.value, 10) }))} className="w-full" />
-                            </div>
-                          </div>
-                        </>
-                      )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-3">
+                            <button onClick={onFitCropToImage} disabled={selectedImageIds.length !== 1} className="w-full text-sm bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-all duration-200 disabled:bg-gray-800 disabled:cursor-not-allowed disabled:text-gray-500">Fit to Image</button>
+                            <button onClick={onCropToView} className="w-full text-sm bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-all duration-200">Fit to View</button>
+                        </div>
+                        <button onClick={onCrop} disabled={!cropArea} className="w-full text-sm bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed">Apply Crop (Enter)</button>
                     </div>
-                  )}
-                </Accordion>
+                )}
 
-                 <Accordion title="Transform & Arrange">
+                {/* Universal Properties Section */}
+                {(isEditingAnnotation || isEditingImage || (activeTool !== 'select' && activeTool !== 'eyedropper' && activeTool !== 'crop')) && (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-gray-100 uppercase tracking-wide">
+                                {isEditingAnnotation ? `Edit ${selectedAnnotationObjects.length > 1 ? 'Selection' : selectedAnnotationObjects[0].type}` : isEditingImage ? 'Edit Image Properties' : 'Tool Properties'}
+                            </h3>
+                            {isEditingAnnotation && (
+                                <button onClick={deleteSelectedAnnotations} className="text-xs text-red-400 hover:text-red-300 flex items-center">
+                                    <TrashIcon className="w-3 h-3 mr-1"/> Delete
+                                </button>
+                            )}
+                        </div>
+                        
+                        {/* Universal Color Picker */}
+                        <div className="bg-gray-800 p-3 rounded-md border border-gray-700">
+                            {renderColorTargetButtons()}
+                            <ColorPicker 
+                                color={getActiveColorValue()} 
+                                onChange={handleColorChange}
+                            />
+                        </div>
+
+                        {/* Contextual Sliders & Inputs */}
+                        <div className="space-y-4 border-t border-gray-800 pt-4">
+                            {/* Width Slider (Stroke or Outline) */}
+                            {/* Shows for: Shapes (target=stroke), Text (target=outline), Freehand/etc (target=outline) */}
+                            {/* Does NOT show for: Text (target=stroke), Shapes (target=fill/bg) */}
+                            {((!isText && activeColorTarget === 'stroke') || activeColorTarget === 'outline') && !isEditingImage && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">
+                                        {isText ? 'Stroke Width' : (activeColorTarget === 'outline' ? 'Outline Width' : 'Stroke Width')}
+                                        {` (${
+                                            activeColorTarget === 'outline'
+                                            ? (isText ? (currentProps.strokeWidth === 'multi' ? 'Mixed' : `${currentProps.strokeWidth}px`) : (currentProps.outlineWidth === 'multi' ? 'Mixed' : `${currentProps.outlineWidth}px`))
+                                            : (currentProps.strokeWidth === 'multi' ? 'Mixed' : `${currentProps.strokeWidth}px`)
+                                        })`}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="50"
+                                        value={
+                                            activeColorTarget === 'outline' 
+                                                ? (isText 
+                                                    ? (currentProps.strokeWidth === 'multi' ? 0 : currentProps.strokeWidth)
+                                                    : (currentProps.outlineWidth === 'multi' ? 0 : currentProps.outlineWidth)
+                                                  ) 
+                                                : (currentProps.strokeWidth === 'multi' ? 0 : currentProps.strokeWidth)
+                                        }
+                                        onChange={e => {
+                                            const val = parseInt(e.target.value, 10);
+                                            if (activeColorTarget === 'outline') {
+                                                if (isText) {
+                                                     isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
+                                                } else {
+                                                     isEditingAnnotation ? onUpdateSelectedAnnotations({ outlineWidth: val }) : setToolOptions((p:any) => ({...p, outlineWidth: val}));
+                                                }
+                                            } else {
+                                                // Stroke target (Shapes)
+                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
+                                            }
+                                        }}
+                                        className="w-full"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Image Outline Width */}
+                            {activeColorTarget === 'outline' && isEditingImage && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">
+                                        Outline Width {`(${commonImageProps?.outlineWidth === 'multi' ? 'Mixed' : `${commonImageProps?.outlineWidth}px`})`}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="50"
+                                        value={commonImageProps?.outlineWidth === 'multi' ? 0 : commonImageProps?.outlineWidth}
+                                        onChange={e => onUpdateSelectedImages({ outlineWidth: parseInt(e.target.value, 10) })}
+                                        className="w-full"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Opacity Sliders */}
+                            {activeColorTarget !== 'stroke' && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Opacity</label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={(() => {
+                                            if (isEditingImage && activeColorTarget === 'outline') {
+                                                const val = commonImageProps?.outlineOpacity;
+                                                return val === 'multi' ? 0 : (val ?? 1); 
+                                            }
+                                            
+                                            let field = getOpacityField(activeColorTarget);
+                                            if (!field) return 1;
+                                            const val = currentProps[field];
+                                            return val === 'multi' ? 0 : (val ?? 1);
+                                        })()}
+                                        onChange={e => {
+                                            const val = parseFloat(e.target.value);
+                                            
+                                            if (isEditingImage && activeColorTarget === 'outline') {
+                                                 onUpdateSelectedImages({ outlineOpacity: val });
+                                                 return;
+                                            }
+
+                                            let field = getOpacityField(activeColorTarget);
+                                            if (field) {
+                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ [field]: val }) : setToolOptions((p:any) => ({...p, [field]: val}));
+                                            }
+                                        }}
+                                        className="w-full"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Text Specifics */}
+                            {isText && activeColorTarget === 'stroke' && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Font Size ({currentProps.fontSize}px)</label>
+                                        <input
+                                            type="range"
+                                            min="8"
+                                            max="128"
+                                            value={currentProps.fontSize === 'multi' ? 32 : currentProps.fontSize}
+                                            onChange={e => {
+                                                const val = parseInt(e.target.value, 10);
+                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ fontSize: val }) : setToolOptions((p:any) => ({...p, fontSize: val}));
+                                            }}
+                                            className="w-full"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Font Family</label>
+                                        <select
+                                            value={currentProps.fontFamily === 'multi' ? '' : currentProps.fontFamily}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ fontFamily: val }) : setToolOptions((p:any) => ({...p, fontFamily: val}));
+                                            }}
+                                            className="w-full bg-gray-800 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 text-xs p-1"
+                                        >
+                                            {currentProps.fontFamily === 'multi' && <option value="">Mixed</option>}
+                                            <option>Arial</option><option>Verdana</option><option>Times New Roman</option><option>Courier New</option><option>Comic Sans MS</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+                            
+                            {/* Text Content Editor */}
+                            {isEditingAnnotation && selectedAnnotationObjects.length === 1 && selectedAnnotationObjects[0].type === 'text' && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Content</label>
+                                    <textarea
+                                        value={(selectedAnnotationObjects[0] as TextAnnotation).text}
+                                        onChange={e => onUpdateSelectedAnnotations({ text: e.target.value })}
+                                        className="w-full bg-gray-800 text-sm text-gray-200 rounded-md border border-gray-600 focus:ring-blue-500 focus:border-blue-500 p-2"
+                                        rows={3}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* Transform & Arrange - Only show if images are selected */}
+                {selectedImageIds.length > 0 && (
+                 <Accordion title="Transform & Arrange" defaultOpen>
                    <p className="text-xs text-gray-400 -mt-2 mb-2" title={getEditingLabel()}>{getEditingLabel()}</p>
                     {selectedImage && selectedImageIds.length === 1 && (
                       <div className="text-sm text-gray-400 bg-gray-800 p-2 rounded-md mb-2">
@@ -353,16 +635,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                             <button onClick={() => handleButtonClick('rotation', 15)} disabled={!selectedImage} className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50"><RotateCwIcon /></button>
                           </div>
                         </div>
-                         {selectedImageIds.length > 0 && (
-                          <div className="mt-4 pt-3 border-t border-gray-700">
-                            <label className="block text-sm font-medium mb-2">Outline</label>
-                            <ColorInput label="Color" color={commonImageProps?.outlineColor === 'multi' ? '#ffffff' : (commonImageProps?.outlineColor || '#000000')} showMixed={commonImageProps?.outlineColor === 'multi'} onChange={newColor => onUpdateSelectedImages({ outlineColor: newColor })} />
-                            <div className="mt-2">
-                              <label className="block text-sm font-medium mb-1">Width ({commonImageProps?.outlineWidth === 'multi' ? 'Mixed' : `${commonImageProps?.outlineWidth}px`})</label>
-                              <input type="range" min="0" max="50" value={commonImageProps?.outlineWidth === 'multi' ? 0 : (commonImageProps?.outlineWidth || 0)} onChange={e => onUpdateSelectedImages({ outlineWidth: parseInt(e.target.value, 10) })} className="w-full"/>
-                            </div>
-                          </div>
-                        )}
+
                         {selectedImageIds.length > 1 && (
                           <div className="mt-4 pt-3 border-t border-gray-700 space-y-3">
                               <button onClick={onCreateGroup} className="w-full flex items-center justify-center bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200">
@@ -382,15 +655,15 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                               <div>
                                   <label className="block text-sm font-medium mb-2">Arrange (Grid)</label>
                                   <div className="grid grid-cols-2 gap-2">
-                                      <button onClick={() => onArrangeImages('horizontal')} title="Arrange Side-by-Side (Grid)" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><ArrangeHorizontalIcon /></button>
-                                      <button onClick={() => onArrangeImages('vertical')} title="Arrange Top-to-Bottom (Grid)" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><ArrangeVerticalIcon /></button>
+                                      <button onClick={() => handleArrangeClick('horizontal')} title="Arrange Side-by-Side (Grid)" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><ArrangeHorizontalIcon /></button>
+                                      <button onClick={() => handleArrangeClick('vertical')} title="Arrange Top-to-Bottom (Grid)" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><ArrangeVerticalIcon /></button>
                                   </div>
                               </div>
                               <div>
                                   <label className="block text-sm font-medium mb-2">Arrange (Stack)</label>
                                   <div className="grid grid-cols-2 gap-2">
-                                      <button onClick={() => onStackImages('horizontal')} title="Stack Side-by-Side" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackHorizontalIcon /></button>
-                                      <button onClick={() => onStackImages('vertical')} title="Stack Top-to-Bottom" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackVerticalIcon /></button>
+                                      <button onClick={() => handleStackClick('horizontal')} title="Stack Side-by-Side" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackHorizontalIcon /></button>
+                                      <button onClick={() => handleStackClick('vertical')} title="Stack Top-to-Bottom" className="p-2 bg-gray-700 rounded-md hover:bg-gray-600 flex justify-center items-center"><StackVerticalIcon /></button>
                                   </div>
                               </div>
                               <div>
@@ -404,77 +677,51 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                         )}
                     </div>
                  </Accordion>
-
-                 <Accordion title="Crop">
-                    <p className="text-xs text-gray-400 -mt-2 mb-2">Hold <kbd className="px-2 py-1 text-xs font-semibold text-gray-200 bg-gray-700 rounded-md">C</kbd> and drag on canvas to create a selection. Press <kbd className="px-2 py-1 text-xs font-semibold text-gray-200 bg-gray-700 rounded-md">Enter</kbd> to crop.</p>
-                     {cropArea && (
-                        <div className="text-sm text-gray-400 bg-gray-800 p-2 rounded-md">
-                        <p>Selection: <span className="font-mono text-gray-200">{`${Math.round(cropArea.width)}x${Math.round(cropArea.height)}px`}</span></p>
-                        </div>
-                    )}
-                    <div>
-                        <label className="block text-sm font-medium mb-1">Aspect Ratio</label>
-                        <div className="grid grid-cols-2 gap-2">
-                        {aspectRatios.map(r => (
-                            <button key={r} onClick={() => setAspectRatio(r)} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${aspectRatio === r ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{r}</button>
-                        ))}
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 mt-3">
-                        <button onClick={onFitCropToImage} disabled={selectedImageIds.length !== 1} className="w-full text-sm bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-all duration-200 disabled:bg-gray-800 disabled:cursor-not-allowed disabled:text-gray-500" title={selectedImageIds.length !== 1 ? "Select a single image" : "Fit to Image"}>Fit to Image</button>
-                        <button onClick={onCropToView} className="w-full text-sm bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-all duration-200">Fit to View</button>
-                    </div>
-                 </Accordion>
+                )}
             </div>
         )}
 
         {activeTab === 'project' && (
              <div className="p-4 space-y-4">
                 <input type="file" multiple accept="image/*" ref={fileInputRef} className="hidden" onChange={(e) => onFileChange(e.target.files)} disabled={isDisabled}/>
-                <input type="file" accept=".cpro" ref={loadProjectInputRef} className="hidden" onChange={handleLoadProjectFileChange} disabled={isDisabled}/>
+                <input type="file" accept=".cpro,.json" ref={loadProjectInputRef} className="hidden" onChange={handleLoadProjectFileChange} disabled={isDisabled}/>
                 
-                <div>
-                    <button onClick={handleUploadClick} disabled={isDisabled} className="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                        <UploadIcon /> <span className="ml-2">Upload Images</span>
+                <button onClick={handleUploadClick} disabled={isDisabled} className="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <UploadIcon /> <span className="ml-2">Upload Images</span>
+                </button>
+                
+                <button onClick={handleLoadProjectClick} disabled={isDisabled} className="w-full flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <FolderOpenIcon /> <span className="ml-2">Load Project</span>
+                </button>
+                
+                <div className="pt-4 border-t border-gray-700">
+                    <label className="block text-sm font-medium mb-2">Export Format</label>
+                    <div className="flex rounded-md bg-gray-800 p-1">
+                        <button onClick={() => setExportFormat('png')} className={`flex-1 text-sm py-1 rounded-sm transition-colors ${exportFormat === 'png' ? 'bg-gray-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}>PNG</button>
+                        <button onClick={() => setExportFormat('jpeg')} className={`flex-1 text-sm py-1 rounded-sm transition-colors ${exportFormat === 'jpeg' ? 'bg-gray-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}>JPEG</button>
+                    </div>
+                </div>
+                
+                <div className="space-y-2">
+                    <button onClick={onSaveProject} className="w-full flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200">
+                        <SaveIcon /> <span className="ml-2">Save Project</span>
                     </button>
-                     <p className="text-xs text-gray-500 mt-2 text-center">or drag & drop / paste from clipboard (Ctrl+V)</p>
+                    <button onClick={onDownloadSelectedImages} disabled={selectedImageIds.length === 0} className="w-full flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <DownloadIcon /> <span className="ml-2">{selectedImageIds.length > 0 ? 'Download Selection' : 'Download Selection'}</span>
+                    </button>
+                    <button onClick={onDownloadAllCanvas} className="w-full flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200">
+                        <DownloadIcon /> <span className="ml-2">Download All</span>
+                    </button>
                 </div>
 
-                 <div className="space-y-3 pt-3 border-t border-gray-800">
-                    <div className="grid grid-cols-2 gap-2">
-                         <button onClick={handleLoadProjectClick} disabled={isDisabled} title="Load Project File (.cpro)" className="flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                            <FolderOpenIcon /> <span className="ml-2">Load</span>
-                        </button>
-                        <button onClick={onSaveProject} disabled={images.length === 0} className="relative flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-3 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                            <SaveIcon /> <span className="ml-2">Save</span>
-                            {isDirty && <span title="Unsaved changes" className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-400 rounded-full"></span>}
-                        </button>
-                    </div>
+                 <div className="pt-4 border-t border-gray-700 mt-auto">
+                    <button onClick={handleClearClick} disabled={isDisabled} className={`w-full flex items-center justify-center text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${isConfirmingClear ? 'bg-red-600 hover:bg-red-700' : 'bg-red-900/50 hover:bg-red-800 text-red-200'}`}>
+                        <TrashIcon /> <span className="ml-2">{isConfirmingClear ? 'Confirm Clear?' : 'Clear Canvas'}</span>
+                    </button>
                 </div>
-
-                 <div className="space-y-3 pt-3 border-t border-gray-800">
-                    <h3 className="text-sm font-semibold text-gray-100">Export</h3>
-                    <div>
-                        <label className="block text-sm font-medium mb-1">Format</label>
-                        <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => setExportFormat('png')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${exportFormat === 'png' ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>PNG</button>
-                        <button onClick={() => setExportFormat('jpeg')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${exportFormat === 'jpeg' ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>JPEG</button>
-                        </div>
-                    </div>
-                  <button onClick={onDownloadSelectedImages} disabled={selectedImageIds.length === 0} className="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                    <DownloadIcon /> <span className="ml-2">Download Selection</span>
-                  </button>
-                  <button onClick={onDownloadAllCanvas} disabled={images.length === 0} className="w-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed">
-                    <DownloadIcon /> <span className="ml-2">Download All (Zip)</span>
-                  </button>
-                  <button onClick={handleClearClick} disabled={images.length === 0} className={`w-full flex items-center justify-center font-bold py-2 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-800 disabled:cursor-not-allowed disabled:text-gray-500 ${isConfirmingClear? 'bg-yellow-500 hover:bg-yellow-600 text-gray-900': 'bg-red-600 hover:bg-red-700 text-white'}`}>
-                    {isConfirmingClear ? 'Confirm Clear' : <><TrashIcon /> <span className="ml-2">Clear Canvas</span></>}
-                  </button>
-                </div>
-            </div>
+             </div>
         )}
       </div>
-
     </aside>
   );
 };

@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { hexToRgb, rgbToHex, hsvToRgb, rgbToHsv, HSV } from '../utils/colorUtils';
 
-interface ColorPickerProps {
+export interface ColorPickerProps {
   color: string;
   onChange: (newColor: string) => void;
-  onClose: () => void;
+  onClose?: () => void;
   onCommit?: () => void;
 }
 
-const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose, onCommit }) => {
+export const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose, onCommit }) => {
   const safeColor = color && /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/i.test(color) ? color : '#000000';
   
   const [hsv, setHsv] = useState<HSV>(() => {
@@ -21,14 +21,14 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose, onC
 
   useEffect(() => {
     const newSafeColor = color && /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/i.test(color) ? color : '#000000';
-    if (newSafeColor !== hex) {
+    if (newSafeColor.toLowerCase() !== hex.toLowerCase()) {
         const rgb = hexToRgb(newSafeColor);
         if (rgb) {
             setHsv(rgbToHsv(rgb));
         }
         setHex(newSafeColor);
     }
-  }, [color]);
+  }, [color, hex]);
 
   const handleHsvChange = useCallback((newHsvPart: Partial<HSV>) => {
     setHsv(currentHsv => {
@@ -92,17 +92,17 @@ const ColorPicker: React.FC<ColorPickerProps> = ({ color, onChange, onClose, onC
   };
 
   return (
-    <div className="p-2 bg-gray-800 rounded-md shadow-lg border border-gray-700 w-56 space-y-3">
+    <div className="flex flex-col space-y-3 w-full">
         <div 
             ref={satValRef}
-            className="w-full h-32 rounded-sm cursor-crosshair relative"
+            className="w-full h-32 rounded-sm cursor-crosshair relative border border-gray-600"
             style={satValStyle}
             onMouseDown={handleSatValMouseDown}
         >
             <div className="absolute inset-0" style={{background: 'linear-gradient(to right, white, transparent)'}}/>
             <div className="absolute inset-0" style={{background: 'linear-gradient(to top, black, transparent)'}}/>
             <div
-                className="w-3 h-3 rounded-full border-2 border-white shadow-md absolute"
+                className="w-3 h-3 rounded-full border-2 border-white shadow-md absolute pointer-events-none"
                 style={{
                     left: `${hsv.s}%`,
                     top: `${100 - hsv.v}%`,
@@ -193,10 +193,9 @@ export const ColorInput: React.FC<{ label: string; color: string; onChange: (new
       </div>
       {isOpen && (
         <div 
-            className="absolute top-full mt-2 z-20"
+            className="absolute top-full mt-2 z-20 p-2 bg-gray-800 rounded-md shadow-lg border border-gray-700 w-56"
             onMouseDown={preventFocusSteal ? (e) => {
                 const target = e.target as HTMLElement;
-                // Allow default browser behavior for range inputs so they can be dragged.
                 if (!(target.tagName.toLowerCase() === 'input' && target.getAttribute('type') === 'range')) {
                     e.preventDefault();
                 }

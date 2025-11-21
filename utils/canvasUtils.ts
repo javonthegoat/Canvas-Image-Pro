@@ -1,4 +1,5 @@
 
+
 import { CanvasImage, Rect, Point, Annotation, TextAnnotation, Group, AspectRatio, FreehandAnnotation, RectAnnotation, CircleAnnotation, ArrowAnnotation, LineAnnotation } from '../types';
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -283,7 +284,7 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
              annotation.points.forEach((p, i) => { if(i===0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
              ctx.stroke();
         } else if (annotation.type === 'rect') {
-            if (annotation.fillColor) {
+            if (annotation.fillColor && annotation.fillColor !== 'transparent') {
                 ctx.fillStyle = hexToRgba(annotation.fillColor, annotation.fillOpacity ?? 1);
                 ctx.fillRect(annotation.x, annotation.y, annotation.width, annotation.height);
             }
@@ -291,7 +292,7 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
         } else if (annotation.type === 'circle') {
             ctx.beginPath();
             ctx.arc(annotation.x, annotation.y, annotation.radius, 0, Math.PI * 2);
-            if (annotation.fillColor) {
+            if (annotation.fillColor && annotation.fillColor !== 'transparent') {
                 ctx.fillStyle = hexToRgba(annotation.fillColor, annotation.fillOpacity ?? 1);
                 ctx.fill();
             }
@@ -436,7 +437,13 @@ export const drawCanvas = (
         ctx.rotate(image.rotation * Math.PI / 180);
         ctx.scale(image.scale, image.scale);
         
-        ctx.drawImage(image.element, -image.width / 2, -image.height / 2, image.width, image.height);
+        // Draw with crop logic
+        const sx = image.cropRect ? image.cropRect.x : 0;
+        const sy = image.cropRect ? image.cropRect.y : 0;
+        const sWidth = image.cropRect ? image.cropRect.width : image.originalWidth;
+        const sHeight = image.cropRect ? image.cropRect.height : image.originalHeight;
+        
+        ctx.drawImage(image.element, sx, sy, sWidth, sHeight, -image.width / 2, -image.height / 2, image.width, image.height);
 
         if (dropTargetImageId === image.id) {
             ctx.strokeStyle = '#3b82f6';
@@ -524,35 +531,33 @@ export const drawCanvas = (
 
     // Draw Groups Labels/Bounds
     groups.forEach(group => {
-        if (group.showLabel || selectedLayerId === group.id) {
-            const bounds = getGroupBounds(group, groups, images);
-            if (bounds) {
-                ctx.save();
-                ctx.strokeStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(255, 255, 255, 0.3)';
-                ctx.lineWidth = 2 / viewTransform.scale;
-                ctx.setLineDash([5 / viewTransform.scale, 5 / viewTransform.scale]);
-                ctx.fillStyle = selectedLayerId === group.id ? 'rgba(59, 130, 246, 0.05)' : 'rgba(255, 255, 255, 0.02)';
-                ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        const bounds = getGroupBounds(group, groups, images);
+        if (bounds) {
+            ctx.save();
+            ctx.strokeStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 2 / viewTransform.scale;
+            ctx.setLineDash([5 / viewTransform.scale, 5 / viewTransform.scale]);
+            ctx.fillStyle = selectedLayerId === group.id ? 'rgba(59, 130, 246, 0.05)' : 'rgba(255, 255, 255, 0.02)';
+            ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
 
-                ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            
+            if (group.showLabel) {
+                const fontSize = 14 / viewTransform.scale;
+                ctx.font = `bold ${fontSize}px sans-serif`;
+                const textMetrics = ctx.measureText(group.label);
+                const padding = 4 / viewTransform.scale;
+                const labelHeight = fontSize + padding * 2;
+                const labelWidth = textMetrics.width + padding * 2;
                 
-                if (group.showLabel) {
-                    const fontSize = 14 / viewTransform.scale;
-                    ctx.font = `bold ${fontSize}px sans-serif`;
-                    const textMetrics = ctx.measureText(group.label);
-                    const padding = 4 / viewTransform.scale;
-                    const labelHeight = fontSize + padding * 2;
-                    const labelWidth = textMetrics.width + padding * 2;
-                    
-                    ctx.fillStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(50, 50, 50, 0.8)';
-                    ctx.fillRect(bounds.x, bounds.y - labelHeight, labelWidth, labelHeight);
-                    
-                    ctx.fillStyle = '#ffffff';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(group.label, bounds.x + padding, bounds.y - labelHeight / 2);
-                }
-                ctx.restore();
+                ctx.fillStyle = selectedLayerId === group.id ? '#3b82f6' : 'rgba(50, 50, 50, 0.8)';
+                ctx.fillRect(bounds.x, bounds.y - labelHeight, labelWidth, labelHeight);
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(group.label, bounds.x + padding, bounds.y - labelHeight / 2);
             }
+            ctx.restore();
         }
     });
 
