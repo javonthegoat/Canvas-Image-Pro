@@ -51,7 +51,7 @@ interface CanvasWrapperProps {
 type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end' | 'scale-multi-annotation' | 'rotate-multi-annotation';
 
 type InteractionState =
-  | { mode: 'pan'; startPoint: Point }
+  | { mode: 'pan' }
   | { mode: 'move'; startPoint: Point }
   | { mode: 'crop'; startPoint: Point }
   | { mode: 'resize-crop'; handle: CropHandle; startPoint: Point; initialCropArea: Rect }
@@ -379,7 +379,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     const canvasPoint = getCanvasPoint(startPoint);
 
     if (isSpacebarPressed) {
-      setInteraction({ mode: 'pan', startPoint });
+      setInteraction({ mode: 'pan' });
       canvas.style.cursor = 'grabbing';
       return;
     }
@@ -630,14 +630,20 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
       if (!interaction) return;
       const currentPoint = { x: e.clientX, y: e.clientY };
       const canvasPoint = getCanvasPoint(currentPoint);
-      const deltaX = (currentPoint.x - lastMousePosition.current.x) / viewTransform.scale;
-      const deltaY = (currentPoint.y - lastMousePosition.current.y) / viewTransform.scale;
+
+      const screenSpaceDelta = {
+          x: currentPoint.x - lastMousePosition.current.x,
+          y: currentPoint.y - lastMousePosition.current.y
+      };
+
+      const deltaX = screenSpaceDelta.x / viewTransform.scale;
+      const deltaY = screenSpaceDelta.y / viewTransform.scale;
+      
       lastMousePosition.current = currentPoint;
       lastCanvasMousePosition.current = canvasPoint;
 
       if (interaction.mode === 'pan') {
-          setViewTransform(prev => ({ ...prev, offset: { x: prev.offset.x + (currentPoint.x - interaction.startPoint.x), y: prev.offset.y + (currentPoint.y - interaction.startPoint.y) } }));
-          setInteraction(prev => prev && prev.mode === 'pan' ? { ...prev, startPoint: currentPoint } : prev);
+          setViewTransform(prev => ({ ...prev, offset: { x: prev.offset.x + screenSpaceDelta.x, y: prev.offset.y + screenSpaceDelta.y } }));
       } else if (interaction.mode === 'move') {
            onMoveSelectedImages({ x: deltaX, y: deltaY });
       } else if (interaction.mode === 'move-annotation') {

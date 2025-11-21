@@ -1,5 +1,4 @@
 
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, AspectRatio, AnnotationTool, Rect, Annotation, TextAnnotation, Group } from '../types';
 import { UploadIcon, ZoomInIcon, ZoomOutIcon, RotateCwIcon, CropIcon, PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, UndoIcon, RedoIcon, ArrowIcon, XIcon, SendToBackIcon, ChevronDownIcon, ChevronUpIcon, BringToFrontIcon, AlignLeftIcon, AlignHorizontalCenterIcon, AlignRightIcon, AlignTopIcon, AlignVerticalCenterIcon, AlignBottomIcon, CopyIcon, DownloadIcon, LineIcon, ArrangeHorizontalIcon, ArrangeVerticalIcon, EyedropperIcon, MaximizeIcon, SaveIcon, FolderOpenIcon, LayersIcon, DistributeHorizontalIcon, DistributeVerticalIcon, MatchWidthIcon, MatchHeightIcon, StackHorizontalIcon, StackVerticalIcon, SlidersIcon } from './icons';
@@ -75,6 +74,37 @@ const Accordion: React.FC<{ title: string; children: React.ReactNode; defaultOpe
         </div>
     </details>
 );
+
+const Slider: React.FC<{
+    label: string;
+    value: number | 'multi';
+    onChange: (value: number) => void;
+    min: number;
+    max: number;
+    step?: number;
+    unit?: string;
+    displayPrecision?: number;
+}> = ({ label, value, onChange, min, max, step = 1, unit = '', displayPrecision = 0 }) => (
+    <div>
+        <label className="block text-sm font-medium mb-1">{label}</label>
+        <div className="flex items-center space-x-2">
+            <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value === 'multi' ? min : value}
+                onChange={e => onChange(step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10))}
+                className="w-full"
+                disabled={value === 'multi'}
+            />
+            <span className="text-xs font-mono w-16 text-center bg-gray-900 rounded-md py-1 border border-gray-700">
+                {value === 'multi' ? 'Mixed' : `${value.toFixed(displayPrecision)}${unit}`}
+            </span>
+        </div>
+    </div>
+);
+
 
 type ColorTarget = 'stroke' | 'fill' | 'outline' | 'bg';
 
@@ -457,120 +487,87 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                         {/* Contextual Sliders & Inputs */}
                         <div className="space-y-4 border-t border-gray-800 pt-4">
                             {/* Width Slider (Stroke or Outline) */}
-                            {/* Shows for: Shapes (target=stroke), Text (target=outline), Freehand/etc (target=outline) */}
-                            {/* Does NOT show for: Text (target=stroke), Shapes (target=fill/bg) */}
                             {((!isText && activeColorTarget === 'stroke') || activeColorTarget === 'outline') && !isEditingImage && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">
-                                        {isText ? 'Stroke Width' : (activeColorTarget === 'outline' ? 'Outline Width' : 'Stroke Width')}
-                                        {` (${
-                                            activeColorTarget === 'outline'
-                                            ? (isText ? (currentProps.strokeWidth === 'multi' ? 'Mixed' : `${currentProps.strokeWidth}px`) : (currentProps.outlineWidth === 'multi' ? 'Mixed' : `${currentProps.outlineWidth}px`))
-                                            : (currentProps.strokeWidth === 'multi' ? 'Mixed' : `${currentProps.strokeWidth}px`)
-                                        })`}
-                                    </label>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="50"
-                                        value={
-                                            activeColorTarget === 'outline' 
-                                                ? (isText 
-                                                    ? (currentProps.strokeWidth === 'multi' ? 0 : currentProps.strokeWidth)
-                                                    : (currentProps.outlineWidth === 'multi' ? 0 : currentProps.outlineWidth)
-                                                  ) 
-                                                : (currentProps.strokeWidth === 'multi' ? 0 : currentProps.strokeWidth)
-                                        }
-                                        onChange={e => {
-                                            const val = parseInt(e.target.value, 10);
-                                            if (activeColorTarget === 'outline') {
-                                                if (isText) {
-                                                     isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
-                                                } else {
-                                                     isEditingAnnotation ? onUpdateSelectedAnnotations({ outlineWidth: val }) : setToolOptions((p:any) => ({...p, outlineWidth: val}));
-                                                }
+                                <Slider
+                                    label={isText ? 'Stroke Width' : (activeColorTarget === 'outline' ? 'Outline Width' : 'Stroke Width')}
+                                    min={0}
+                                    max={50}
+                                    unit="px"
+                                    value={
+                                        activeColorTarget === 'outline' 
+                                            ? (isText ? currentProps.strokeWidth : currentProps.outlineWidth) 
+                                            : currentProps.strokeWidth
+                                    }
+                                    onChange={val => {
+                                        if (activeColorTarget === 'outline') {
+                                            if (isText) {
+                                                 isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
                                             } else {
-                                                // Stroke target (Shapes)
-                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
+                                                 isEditingAnnotation ? onUpdateSelectedAnnotations({ outlineWidth: val }) : setToolOptions((p:any) => ({...p, outlineWidth: val}));
                                             }
-                                        }}
-                                        className="w-full"
-                                    />
-                                </div>
+                                        } else {
+                                            isEditingAnnotation ? onUpdateSelectedAnnotations({ strokeWidth: val }) : setToolOptions((p:any) => ({...p, strokeWidth: val}));
+                                        }
+                                    }}
+                                />
                             )}
 
                             {/* Image Outline Width */}
                             {activeColorTarget === 'outline' && isEditingImage && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">
-                                        Outline Width {`(${commonImageProps?.outlineWidth === 'multi' ? 'Mixed' : `${commonImageProps?.outlineWidth}px`})`}
-                                    </label>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="50"
-                                        value={commonImageProps?.outlineWidth === 'multi' ? 0 : commonImageProps?.outlineWidth}
-                                        onChange={e => onUpdateSelectedImages({ outlineWidth: parseInt(e.target.value, 10) })}
-                                        className="w-full"
-                                    />
-                                </div>
+                                <Slider
+                                    label="Outline Width"
+                                    min={0}
+                                    max={50}
+                                    unit="px"
+                                    value={commonImageProps?.outlineWidth}
+                                    onChange={val => onUpdateSelectedImages({ outlineWidth: val })}
+                                />
                             )}
 
                             {/* Opacity Sliders */}
                             {activeColorTarget !== 'stroke' && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Opacity</label>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="1"
-                                        step="0.05"
-                                        value={(() => {
-                                            if (isEditingImage && activeColorTarget === 'outline') {
-                                                const val = commonImageProps?.outlineOpacity;
-                                                return val === 'multi' ? 0 : (val ?? 1); 
-                                            }
-                                            
-                                            let field = getOpacityField(activeColorTarget);
-                                            if (!field) return 1;
-                                            const val = currentProps[field];
-                                            return val === 'multi' ? 0 : (val ?? 1);
-                                        })()}
-                                        onChange={e => {
-                                            const val = parseFloat(e.target.value);
-                                            
-                                            if (isEditingImage && activeColorTarget === 'outline') {
-                                                 onUpdateSelectedImages({ outlineOpacity: val });
-                                                 return;
-                                            }
-
-                                            let field = getOpacityField(activeColorTarget);
-                                            if (field) {
-                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ [field]: val }) : setToolOptions((p:any) => ({...p, [field]: val}));
-                                            }
-                                        }}
-                                        className="w-full"
-                                    />
-                                </div>
+                                <Slider
+                                    label="Opacity"
+                                    min={0}
+                                    max={1}
+                                    step={0.05}
+                                    displayPrecision={2}
+                                    value={(() => {
+                                        if (isEditingImage && activeColorTarget === 'outline') {
+                                            const val = commonImageProps?.outlineOpacity;
+                                            return val === 'multi' ? 0 : (val ?? 1); 
+                                        }
+                                        let field = getOpacityField(activeColorTarget);
+                                        if (!field) return 1;
+                                        const val = currentProps[field];
+                                        return val === 'multi' ? 0 : (val ?? 1);
+                                    })()}
+                                    onChange={val => {
+                                        if (isEditingImage && activeColorTarget === 'outline') {
+                                             onUpdateSelectedImages({ outlineOpacity: val });
+                                             return;
+                                        }
+                                        let field = getOpacityField(activeColorTarget);
+                                        if (field) {
+                                            isEditingAnnotation ? onUpdateSelectedAnnotations({ [field]: val }) : setToolOptions((p:any) => ({...p, [field]: val}));
+                                        }
+                                    }}
+                                />
                             )}
 
                             {/* Text Specifics */}
                             {isText && activeColorTarget === 'stroke' && (
                                 <>
-                                    <div>
-                                        <label className="block text-sm font-medium mb-1">Font Size ({currentProps.fontSize}px)</label>
-                                        <input
-                                            type="range"
-                                            min="8"
-                                            max="128"
-                                            value={currentProps.fontSize === 'multi' ? 32 : currentProps.fontSize}
-                                            onChange={e => {
-                                                const val = parseInt(e.target.value, 10);
-                                                isEditingAnnotation ? onUpdateSelectedAnnotations({ fontSize: val }) : setToolOptions((p:any) => ({...p, fontSize: val}));
-                                            }}
-                                            className="w-full"
-                                        />
-                                    </div>
+                                    <Slider
+                                        label="Font Size"
+                                        min={8}
+                                        max={128}
+                                        unit="px"
+                                        value={currentProps.fontSize}
+                                        onChange={val => {
+                                            isEditingAnnotation ? onUpdateSelectedAnnotations({ fontSize: val }) : setToolOptions((p:any) => ({...p, fontSize: val}));
+                                        }}
+                                    />
                                     <div>
                                         <label className="block text-sm font-medium mb-1">Font Family</label>
                                         <select

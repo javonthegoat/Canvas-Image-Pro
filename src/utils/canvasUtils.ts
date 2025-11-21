@@ -1,5 +1,4 @@
 
-
 import { CanvasImage, Rect, Point, Annotation, TextAnnotation, Group, AspectRatio, FreehandAnnotation, RectAnnotation, CircleAnnotation, ArrowAnnotation, LineAnnotation } from '../types';
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -307,8 +306,16 @@ export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annota
             if (annotation.backgroundColor && annotation.backgroundOpacity > 0) {
                  const widths = lines.map(line => ctx.measureText(line).width);
                  const maxWidth = Math.max(0, ...widths);
+                 const yPadding = annotation.fontSize * 0.15;
+                 const xPadding = annotation.fontSize * 0.1;
+                 const totalHeight = lineHeight * lines.length;
                  ctx.fillStyle = hexToRgba(annotation.backgroundColor, annotation.backgroundOpacity ?? 1);
-                 ctx.fillRect(annotation.x, annotation.y, maxWidth, lineHeight * lines.length);
+                 ctx.fillRect(
+                     annotation.x - xPadding, 
+                     annotation.y - yPadding, 
+                     maxWidth + xPadding * 2, 
+                     totalHeight + yPadding * 2
+                 );
             }
 
             ctx.fillStyle = annotation.color;

@@ -2,6 +2,8 @@
 
 
 
+
+
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { CanvasImage, Group, Annotation, Rect, Point, AspectRatio, AnnotationTool, AnnotationSelection, TextAnnotation, RectAnnotation, CircleAnnotation } from './types';
 import { CanvasWrapper } from './components/CanvasWrapper';
@@ -1142,6 +1144,15 @@ const App: React.FC = () => {
         setGroups(prev => prev.map(g => g.id === groupId ? { ...g, name: newName } : g));
     }, []);
 
+    const handleColorPicked = useCallback((color: string) => {
+        if (selectedAnnotations.length > 0) {
+            updateSelectedAnnotations({ color });
+        } else {
+            setToolOptions(prev => ({ ...prev, color }));
+        }
+        setActiveTool('select');
+    }, [selectedAnnotations, updateSelectedAnnotations]);
+
 
     return (
         <div className="flex h-screen w-screen bg-gray-900 text-white overflow-hidden">
@@ -1224,7 +1235,7 @@ const App: React.FC = () => {
                         updateAnnotation={updateSelectedAnnotations}
                         updateMultipleAnnotationsForInteraction={updateMultipleAnnotationsForInteraction}
                         selectedAnnotationObjects={selectedAnnotationObjects}
-                        onColorPicked={(c) => setToolOptions(prev => ({...prev, color: c}))}
+                        onColorPicked={handleColorPicked}
                         canvasAnnotations={canvasAnnotations}
                         addCanvasAnnotation={addCanvasAnnotation}
                         onMoveSelectedAnnotations={handleMoveSelectedAnnotations}
