@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
@@ -861,13 +855,28 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         const rw = Math.abs(width);
         const rh = Math.abs(height);
         const selectionRect = { x: rx, y: ry, width: rw, height: rh };
+        
         const selectedImages = images.filter(img => rectIntersect(selectionRect, { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale })).map(img => img.id);
         const selectedAnnos: AnnotationSelection[] = [];
+        
+        // Check Canvas Annotations
         canvasAnnotations.forEach(anno => {
             if (rectIntersect(selectionRect, getAnnotationPrimitiveBounds(anno, contextRef.current!))) {
                 selectedAnnos.push({ imageId: null, annotationId: anno.id });
             }
         });
+
+        // Check Image Annotations
+        images.forEach(img => {
+            img.annotations.forEach(anno => {
+                const annoSelection = { imageId: img.id, annotationId: anno.id };
+                const bounds = getMultiAnnotationBounds([annoSelection], images, [], contextRef.current!);
+                if (bounds && rectIntersect(selectionRect, bounds)) {
+                    selectedAnnos.push(annoSelection);
+                }
+            });
+        });
+
         onBoxSelect(selectedImages, selectedAnnos, interaction.shiftKey);
     }
 

@@ -1,5 +1,3 @@
-
-
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
@@ -270,16 +268,21 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
          const cos = Math.cos(rad);
          const sin = Math.sin(rad);
          p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-         if (annotation.scale !== 0) {
-             p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
-         }
+         
+         const effectiveScale = annotation.scale || 0.0001;
+         p = { x: p.x / effectiveScale, y: p.y / effectiveScale };
+         
          const localPointInAnnotation = { x: p.x + center.x, y: p.y + center.y };
+
+         // Define hit tolerance in screen pixels
+         const HIT_TOLERANCE_PX = 12;
+         const localTolerance = HIT_TOLERANCE_PX / (imageScale * viewTransform.scale * Math.abs(effectiveScale));
 
          if (annotation.type === 'line' || annotation.type === 'arrow' || annotation.type === 'freehand') {
             const points = annotation.type === 'freehand' ? annotation.points : [annotation.start, annotation.end];
             if (points.length < 2) return false;
 
-            const clickThreshold = (annotation.strokeWidth / 2) + (5 / (imageScale * viewTransform.scale * annotation.scale));
+            const clickThreshold = (annotation.strokeWidth / 2) + localTolerance;
 
             for (let i = 0; i < points.length - 1; i++) {
                 const start = points[i];
@@ -304,6 +307,12 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
             if (normalizedBounds.width < 0) { normalizedBounds.x += normalizedBounds.width; normalizedBounds.width *= -1; }
             if (normalizedBounds.height < 0) { normalizedBounds.y += normalizedBounds.height; normalizedBounds.height *= -1; }
             
+            // Expand bounds by tolerance for easier selection
+            normalizedBounds.x -= localTolerance;
+            normalizedBounds.y -= localTolerance;
+            normalizedBounds.width += localTolerance * 2;
+            normalizedBounds.height += localTolerance * 2;
+
             return isPointInRect(localPointInAnnotation, normalizedBounds);
          }
     };
