@@ -93,13 +93,13 @@ const Slider: React.FC<{
                 min={min}
                 max={max}
                 step={step}
-                value={value === 'multi' ? min : value}
+                value={value === 'multi' ? min : (typeof value === 'number' ? value : min)}
                 onChange={e => onChange(step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10))}
                 className="w-full"
                 disabled={value === 'multi'}
             />
             <span className="text-xs font-mono w-16 text-center bg-gray-900 rounded-md py-1 border border-gray-700">
-                {value === 'multi' ? 'Mixed' : `${value.toFixed(displayPrecision)}${unit}`}
+                {value === 'multi' ? 'Mixed' : `${(typeof value === 'number' ? value : 0).toFixed(displayPrecision)}${unit}`}
             </span>
         </div>
     </div>
@@ -494,9 +494,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                     max={50}
                                     unit="px"
                                     value={
-                                        activeColorTarget === 'outline' 
+                                        (activeColorTarget === 'outline' 
                                             ? (isText ? currentProps.strokeWidth : currentProps.outlineWidth) 
-                                            : currentProps.strokeWidth
+                                            : currentProps.strokeWidth) ?? 0
                                     }
                                     onChange={val => {
                                         if (activeColorTarget === 'outline') {
@@ -519,7 +519,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                     min={0}
                                     max={50}
                                     unit="px"
-                                    value={commonImageProps?.outlineWidth}
+                                    value={commonImageProps?.outlineWidth ?? 0}
                                     onChange={val => onUpdateSelectedImages({ outlineWidth: val })}
                                 />
                             )}
@@ -563,7 +563,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                         min={8}
                                         max={128}
                                         unit="px"
-                                        value={currentProps.fontSize}
+                                        value={currentProps.fontSize ?? 16}
                                         onChange={val => {
                                             isEditingAnnotation ? onUpdateSelectedAnnotations({ fontSize: val }) : setToolOptions((p:any) => ({...p, fontSize: val}));
                                         }}
