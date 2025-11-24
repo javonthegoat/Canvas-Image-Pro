@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { CanvasImage, Group, Annotation, Rect, Point, AspectRatio, AnnotationTool, AnnotationSelection, TextAnnotation, RectAnnotation, CircleAnnotation } from './types';
 import { CanvasWrapper } from './components/CanvasWrapper';
@@ -12,9 +6,8 @@ import { LeftSidebar } from './components/LeftSidebar';
 import LayersPanel from './components/LayersPanel';
 import { MiniMap } from './components/MiniMap';
 import { FloatingAnnotationEditor } from './components/FloatingAnnotationEditor';
-import { readImageFile } from './utils/fileUtils';
-import { getImagesBounds, transformGlobalToLocal, transformLocalToGlobal, rectIntersect, getAnnotationBounds } from './utils/canvasUtils';
-import { drawAnnotation } from './utils/canvasUtils';
+import { readImageFile, downloadDataUrl } from './utils/fileUtils';
+import { getImagesBounds, transformGlobalToLocal, transformLocalToGlobal, rectIntersect, getAnnotationBounds, drawAnnotation } from './utils/canvasUtils';
 
 interface AppState {
     images: CanvasImage[];
@@ -96,6 +89,79 @@ const App: React.FC = () => {
 
     const resetLastArrangement = useCallback(() => {}, []);
     
+    const renderAndDownload = useCallback(async (
+        itemsToDraw: CanvasImage[], 
+        canvasAnnosToDraw: Annotation[], 
+        specificBounds: Rect | null,
+        filename: string
+    ) => {
+        let bounds = specificBounds;
+        
+        if (!bounds) {
+            bounds = getImagesBounds(itemsToDraw);
+            // Expand with canvas annotations
+            const tempCtx = document.createElement('canvas').getContext('2d');
+            if (tempCtx) {
+                 canvasAnnosToDraw.forEach(anno => {
+                    const b = getAnnotationBounds(anno, tempCtx);
+                    if (!bounds) bounds = b;
+                    else {
+                        const minX = Math.min(bounds.x, b.x);
+                        const minY = Math.min(bounds.y, b.y);
+                        const maxX = Math.max(bounds.x + bounds.width, b.x + b.width);
+                        const maxY = Math.max(bounds.y + bounds.height, b.y + b.height);
+                        bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+                    }
+                 });
+            }
+        }
+        
+        if (!bounds) return;
+
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = bounds.width;
+        offscreenCanvas.height = bounds.height;
+        const ctx = offscreenCanvas.getContext('2d');
+        if (!ctx) return;
+        
+        // Draw Background
+        ctx.fillStyle = '#1f2937';
+        ctx.fillRect(0, 0, bounds.width, bounds.height);
+        
+        ctx.save();
+        ctx.translate(-bounds.x, -bounds.y);
+
+        // Draw Images
+        itemsToDraw.forEach(image => {
+            ctx.save();
+            const centerX = image.x + (image.width * image.scale) / 2;
+            const centerY = image.y + (image.height * image.scale) / 2;
+            ctx.translate(centerX, centerY);
+            ctx.rotate(image.rotation * Math.PI / 180);
+            ctx.scale(image.scale, image.scale);
+            
+            const sx = image.cropRect ? image.cropRect.x : 0;
+            const sy = image.cropRect ? image.cropRect.y : 0;
+            const sWidth = image.cropRect ? image.cropRect.width : image.originalWidth;
+            const sHeight = image.cropRect ? image.cropRect.height : image.originalHeight;
+            
+            ctx.drawImage(image.element, sx, sy, sWidth, sHeight, -image.width / 2, -image.height / 2, image.width, image.height);
+    
+            ctx.translate(-image.width / 2, -image.height / 2);
+            image.annotations.forEach(anno => drawAnnotation(ctx, anno));
+    
+            ctx.restore();
+        });
+        
+        // Draw Canvas Annotations
+        canvasAnnosToDraw.forEach(anno => drawAnnotation(ctx, anno));
+        ctx.restore();
+
+        const dataUrl = offscreenCanvas.toDataURL(exportFormat === 'png' ? 'image/png' : 'image/jpeg');
+        downloadDataUrl(dataUrl, filename);
+
+    }, [exportFormat]);
+
     const handleCopyToClipboard = useCallback(async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -116,7 +182,6 @@ const App: React.FC = () => {
                 const imgRect = { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale };
                 return rectIntersect(normalizedCrop, imgRect);
             });
-            // Approximate check for canvas annotations
             const tempCtx = document.createElement('canvas').getContext('2d');
             if (tempCtx) {
                 canvasAnnosToDraw = canvasAnnotations.filter(anno => {
@@ -143,14 +208,12 @@ const App: React.FC = () => {
         ctx.save();
         ctx.translate(-bounds.x, -bounds.y);
     
-        // Add clipping for crop area
         if (cropArea) {
             ctx.beginPath();
             ctx.rect(bounds.x, bounds.y, bounds.width, bounds.height);
             ctx.clip();
         }
 
-        // Draw images and their annotations
         itemsToDraw.forEach(image => {
             ctx.save();
             const centerX = image.x + (image.width * image.scale) / 2;
@@ -172,7 +235,6 @@ const App: React.FC = () => {
             ctx.restore();
         });
     
-        // Draw canvas annotations
         canvasAnnosToDraw.forEach(anno => drawAnnotation(ctx, anno));
     
         ctx.restore();
@@ -371,12 +433,28 @@ const App: React.FC = () => {
              const newX = newGlobalCenter.x - (newWidth * img.scale) / 2;
              const newY = newGlobalCenter.y - (newHeight * img.scale) / 2;
 
+             // Adjust Annotations: Shift them by crop offset
+             const newAnnotations = img.annotations.map(anno => {
+                 const newAnno = { ...anno };
+                 if (newAnno.type === 'arrow' || newAnno.type === 'line') {
+                     newAnno.start = { x: newAnno.start.x - cropX, y: newAnno.start.y - cropY };
+                     newAnno.end = { x: newAnno.end.x - cropX, y: newAnno.end.y - cropY };
+                 } else if (newAnno.type === 'freehand') {
+                     newAnno.points = newAnno.points.map(p => ({ x: p.x - cropX, y: p.y - cropY }));
+                 } else {
+                     newAnno.x -= cropX;
+                     newAnno.y -= cropY;
+                 }
+                 return newAnno;
+             });
+
              return {
                  ...img,
                  width: newWidth,
                  height: newHeight,
                  x: newX,
                  y: newY,
+                 annotations: newAnnotations,
                  cropRect: {
                      x: (img.cropRect?.x ?? 0) + cropX,
                      y: (img.cropRect?.y ?? 0) + cropY,
@@ -763,7 +841,6 @@ const App: React.FC = () => {
             if (selectedIds.size === 0) return prevAnnos;
             return prevAnnos.map(anno => {
                 if (selectedIds.has(anno.id)) {
-                    // FIX: Use switch on discriminated union to ensure type safety.
                     switch (anno.type) {
                         case 'arrow':
                         case 'line':
@@ -809,7 +886,6 @@ const App: React.FC = () => {
     
                     const newAnnotations = img.annotations.map(anno => {
                         if (selectedAnnoIds.has(anno.id)) {
-                            // FIX: Use switch on discriminated union to ensure type safety.
                             switch (anno.type) {
                                 case 'arrow':
                                 case 'line':
@@ -847,7 +923,6 @@ const App: React.FC = () => {
     }, []);
 
     const onInteractionEnd = useCallback(() => {
-        // FIX: In onInteractionEnd, call pushHistory with an empty object to satisfy its argument requirement and correctly capture a state in history.
         pushHistory({});
     }, [pushHistory]);
     
@@ -1082,9 +1157,6 @@ const App: React.FC = () => {
         });
     }, [selectedImageIds, groups, pushHistory]);
 
-    // FIX: This function implements the logic for updating multiple annotations during an interaction (e.g. scaling or rotating a group of annotations).
-    // It takes an array of updates and applies them to the state without pushing to the history on each change, improving performance.
-    // The history is updated once the interaction ends via onInteractionEnd.
     const updateMultipleAnnotationsForInteraction = useCallback((updates: Array<{ selection: AnnotationSelection; changes: Partial<Annotation> }>) => {
         const imageUpdates = new Map<string, Map<string, Partial<Annotation>>>();
         const canvasUpdates = new Map<string, Partial<Annotation>>();
@@ -1181,14 +1253,29 @@ const App: React.FC = () => {
                 setExportFormat={setExportFormat}
                 onFitCropToImage={() => { /* impl */ }}
                 isLocked={isLocked}
-                onClearAllCanvas={() => { /* impl */ }}
-                onDownloadAllCanvas={() => { /* impl */ }}
+                onClearAllCanvas={() => {
+                    setImages([]);
+                    setGroups([]);
+                    setCanvasAnnotations([]);
+                    setSelectedImageIds([]);
+                    setSelectedAnnotations([]);
+                    setCropArea(null);
+                    pushHistory({ images: [], groups: [], canvasAnnotations: [], selectedImageIds: [], selectedAnnotations: [] });
+                }}
+                onDownloadAllCanvas={() => renderAndDownload(images, canvasAnnotations, null, `canvas-export.${exportFormat}`)}
                 onUncrop={handleUncrop}
                 onSaveProject={() => { /* impl */ }}
                 onLoadProject={() => { /* impl */ }}
                 onCreateGroup={onCreateGroup}
                 images={images}
-                onDownloadSelectedImages={() => { /* impl */ }}
+                onDownloadSelectedImages={() => {
+                     const selectedImages = images.filter(i => selectedImageIds.includes(i.id));
+                     const selectedCanvasAnnos = canvasAnnotations.filter(a => selectedAnnotations.some(s => s.annotationId === a.id && s.imageId === null));
+                     
+                     if (selectedImages.length === 0 && selectedCanvasAnnos.length === 0) return;
+
+                     renderAndDownload(selectedImages, selectedCanvasAnnos, null, `selection-export.${exportFormat}`);
+                }}
                 isDirty={historyIndex >= 0}
                 selectedAnnotationObjects={selectedAnnotationObjects}
                 onUpdateSelectedAnnotations={updateSelectedAnnotations}
