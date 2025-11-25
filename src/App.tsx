@@ -12,6 +12,7 @@ interface AppState {
     images: CanvasImage[];
     groups: Group[];
     canvasAnnotations: Annotation[];
+    layerOrder: string[]; // IDs of top-level items (images, groups, canvas annotations)
     selectedImageIds: string[];
     selectedAnnotations: AnnotationSelection[];
     selectedLayerId: string | null;
@@ -22,6 +23,8 @@ const App: React.FC = () => {
     const [images, setImages] = useState<CanvasImage[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
     const [canvasAnnotations, setCanvasAnnotations] = useState<Annotation[]>([]);
+    const [layerOrder, setLayerOrder] = useState<string[]>([]);
+    
     const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
     const [selectedAnnotations, setSelectedAnnotations] = useState<AnnotationSelection[]>([]);
     const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
@@ -58,11 +61,12 @@ const App: React.FC = () => {
         images: [],
         groups: [],
         canvasAnnotations: [],
+        layerOrder: [],
         selectedImageIds: [],
         selectedAnnotations: [],
         selectedLayerId: null
     });
-    appStateRef.current = { images, groups, canvasAnnotations, selectedImageIds, selectedAnnotations, selectedLayerId };
+    appStateRef.current = { images, groups, canvasAnnotations, layerOrder, selectedImageIds, selectedAnnotations, selectedLayerId };
 
     // Helpers
     const pushHistory = useCallback((newState: Partial<AppState>) => {
@@ -77,6 +81,7 @@ const App: React.FC = () => {
         if (newState.images) setImages(newState.images);
         if (newState.groups) setGroups(newState.groups);
         if (newState.canvasAnnotations) setCanvasAnnotations(newState.canvasAnnotations);
+        if (newState.layerOrder) setLayerOrder(newState.layerOrder);
         if (newState.selectedImageIds) setSelectedImageIds(newState.selectedImageIds);
         if (newState.selectedAnnotations) setSelectedAnnotations(newState.selectedAnnotations);
         if (newState.selectedLayerId !== undefined) setSelectedLayerId(newState.selectedLayerId);
@@ -91,10 +96,181 @@ const App: React.FC = () => {
         if (updates.images !== undefined) setImages(updates.images);
         if (updates.groups !== undefined) setGroups(updates.groups);
         if (updates.canvasAnnotations !== undefined) setCanvasAnnotations(updates.canvasAnnotations);
+        if (updates.layerOrder !== undefined) setLayerOrder(updates.layerOrder);
     }, []);
 
     const resetLastArrangement = useCallback(() => {}, []);
     
+    // Layer Manipulation Handlers
+    const reorderLayers = useCallback((draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => {
+        const currentLayerOrder = [...layerOrder];
+        const allGroups = [...groups];
+        const allImages = [...images];
+        const allCanvasAnnos = [...canvasAnnotations];
+
+        // Check if dragged item is top-level
+        const draggedIndex = currentLayerOrder.indexOf(draggedId);
+        
+        if (draggedIndex !== -1) {
+            // Moving a top-level item (Image, Group, or CanvasAnnotation)
+            currentLayerOrder.splice(draggedIndex, 1);
+            
+            if (position === 'inside') {
+                // Moving into a group
+                const targetGroupIndex = allGroups.findIndex(g => g.id === targetId);
+                if (targetGroupIndex !== -1) {
+                    // Only images can be put into groups currently (as per types)
+                    // If it's an image, add to group. If it's an annotation, maybe fail or support later?
+                    // Type definition says `imageIds: string[]` and `groupIds: string[]`.
+                    // CanvasAnnotations are not supported inside groups by the current type definition.
+                    const isImage = allImages.some(img => img.id === draggedId);
+                    const isGroup = allGroups.some(g => g.id === draggedId);
+                    
+                    if (isImage) {
+                        const newGroups = [...allGroups];
+                        newGroups[targetGroupIndex] = {
+                            ...newGroups[targetGroupIndex],
+                            imageIds: [...newGroups[targetGroupIndex].imageIds, draggedId]
+                        };
+                        setGroups(newGroups);
+                        setLayerOrder(currentLayerOrder); // Removed from top level
+                        pushHistory({ groups: newGroups, layerOrder: currentLayerOrder });
+                        return;
+                    } else if (isGroup) {
+                         const newGroups = [...allGroups];
+                         newGroups[targetGroupIndex] = {
+                             ...newGroups[targetGroupIndex],
+                             groupIds: [...newGroups[targetGroupIndex].groupIds, draggedId]
+                         };
+                         setGroups(newGroups);
+                         setLayerOrder(currentLayerOrder);
+                         pushHistory({ groups: newGroups, layerOrder: currentLayerOrder });
+                         return;
+                    }
+                    // If annotation, cancel move (re-insert)
+                    currentLayerOrder.splice(draggedIndex, 0, draggedId);
+                    return;
+                }
+            } else {
+                // Reordering at top level
+                const targetIndex = currentLayerOrder.indexOf(targetId);
+                if (targetIndex !== -1) {
+                    if (position === 'before') {
+                        currentLayerOrder.splice(targetIndex + 1, 0, draggedId); // Visual 'before' is higher index (drawn later)
+                    } else {
+                        currentLayerOrder.splice(targetIndex, 0, draggedId);
+                    }
+                    setLayerOrder(currentLayerOrder);
+                    pushHistory({ layerOrder: currentLayerOrder });
+                } else {
+                     // Target might be nested? If target is not found in top level, we might be dragging inside a group panel?
+                     // For now assume reordering is mostly top-level or handled by specific group reordering logic if implemented.
+                     // Re-insert if fail
+                     currentLayerOrder.splice(draggedIndex, 0, draggedId);
+                }
+            }
+        } else {
+            // Dragged item is NOT top-level (it's inside a group)
+            // Logic for moving out of group or within group would go here.
+            // Simplification: For now, support top-level reordering.
+            // If `draggedId` is in a group, we need to find which group, remove it, and place it in `targetId` context.
+            
+            let sourceGroupIndex = -1;
+            let isImage = false;
+            
+            allGroups.forEach((g, idx) => {
+                if (g.imageIds.includes(draggedId)) {
+                    sourceGroupIndex = idx;
+                    isImage = true;
+                } else if (g.groupIds.includes(draggedId)) {
+                    sourceGroupIndex = idx;
+                }
+            });
+
+            if (sourceGroupIndex !== -1) {
+                // Remove from source group
+                const newGroups = [...allGroups];
+                if (isImage) {
+                    newGroups[sourceGroupIndex] = { ...newGroups[sourceGroupIndex], imageIds: newGroups[sourceGroupIndex].imageIds.filter(id => id !== draggedId) };
+                } else {
+                    newGroups[sourceGroupIndex] = { ...newGroups[sourceGroupIndex], groupIds: newGroups[sourceGroupIndex].groupIds.filter(id => id !== draggedId) };
+                }
+
+                // Place in target
+                // If target is top level
+                const targetIndex = currentLayerOrder.indexOf(targetId);
+                if (targetIndex !== -1) {
+                     if (position === 'before') {
+                        currentLayerOrder.splice(targetIndex + 1, 0, draggedId);
+                    } else {
+                        currentLayerOrder.splice(targetIndex, 0, draggedId);
+                    }
+                    setGroups(newGroups);
+                    setLayerOrder(currentLayerOrder);
+                    pushHistory({ groups: newGroups, layerOrder: currentLayerOrder });
+                }
+            }
+        }
+    }, [layerOrder, groups, images, canvasAnnotations, pushHistory]);
+
+    const toggleLayerVisibility = useCallback((id: string, type: 'image' | 'group') => {
+        if (type === 'image') {
+            const newImages = images.map(img => img.id === id ? { ...img, visible: img.visible === undefined ? false : !img.visible } : img);
+            setImages(newImages); 
+        } else {
+            const newGroups = groups.map(g => g.id === id ? { ...g, visible: g.visible === undefined ? false : !g.visible } : g);
+            setGroups(newGroups);
+        }
+    }, [images, groups]);
+
+    const toggleLayerLock = useCallback((id: string, type: 'image' | 'group') => {
+        if (type === 'image') {
+            const newImages = images.map(img => img.id === id ? { ...img, locked: img.locked === undefined ? true : !img.locked } : img);
+            setImages(newImages);
+        } else {
+            const newGroups = groups.map(g => g.id === id ? { ...g, locked: g.locked === undefined ? true : !g.locked } : g);
+            setGroups(newGroups);
+        }
+    }, [images, groups]);
+
+    const duplicateLayer = useCallback(() => {
+        if (selectedLayerId) {
+            const imageToDup = images.find(i => i.id === selectedLayerId);
+            const groupToDup = groups.find(g => g.id === selectedLayerId);
+            const annoToDup = canvasAnnotations.find(a => a.id === selectedLayerId);
+
+            if (imageToDup) {
+                const newImage = { ...imageToDup, id: `img-${Date.now()}-${Math.random()}`, name: `${imageToDup.name} Copy`, x: imageToDup.x + 10, y: imageToDup.y + 10 };
+                newImage.annotations = newImage.annotations.map(a => ({ ...a, id: `anno-${Date.now()}-${Math.random()}` }));
+                
+                let newImages = [...images];
+                newImages.push(newImage);
+                
+                // Insert into layer order after original
+                const newLayerOrder = [...layerOrder];
+                const idx = newLayerOrder.indexOf(selectedLayerId);
+                if (idx !== -1) newLayerOrder.splice(idx + 1, 0, newImage.id);
+                else newLayerOrder.push(newImage.id);
+
+                pushHistory({ images: newImages, layerOrder: newLayerOrder, selectedImageIds: [newImage.id], selectedLayerId: newImage.id });
+            } else if (annoToDup) {
+                const newAnno = { ...annoToDup, id: `anno-${Date.now()}-${Math.random()}` };
+                // Offset
+                if ('x' in newAnno) { newAnno.x += 10; newAnno.y += 10; }
+                else if ('points' in newAnno) { newAnno.points = newAnno.points.map(p => ({x: p.x+10, y: p.y+10})); }
+                else if ('start' in newAnno) { newAnno.start = {x: newAnno.start.x+10, y: newAnno.start.y+10}; newAnno.end = {x: newAnno.end.x+10, y: newAnno.end.y+10}; }
+
+                const newAnnos = [...canvasAnnotations, newAnno];
+                const newLayerOrder = [...layerOrder];
+                const idx = newLayerOrder.indexOf(selectedLayerId);
+                if (idx !== -1) newLayerOrder.splice(idx + 1, 0, newAnno.id);
+                else newLayerOrder.push(newAnno.id);
+
+                pushHistory({ canvasAnnotations: newAnnos, layerOrder: newLayerOrder, selectedAnnotations: [{ imageId: null, annotationId: newAnno.id }], selectedLayerId: newAnno.id });
+            }
+        } 
+    }, [selectedLayerId, images, groups, canvasAnnotations, layerOrder, pushHistory]);
+
     const renderAndDownload = useCallback(async (
         itemsToDraw: CanvasImage[], 
         canvasAnnosToDraw: Annotation[], 
@@ -105,7 +281,6 @@ const App: React.FC = () => {
         
         if (!bounds) {
             bounds = getImagesBounds(itemsToDraw);
-            // Expand with canvas annotations
             const tempCtx = document.createElement('canvas').getContext('2d');
             if (tempCtx) {
                  canvasAnnosToDraw.forEach(anno => {
@@ -137,7 +312,12 @@ const App: React.FC = () => {
         ctx.save();
         ctx.translate(-bounds.x, -bounds.y);
 
-        // Draw Images
+        // Draw items in layer order? For export, usually simpler to just draw requested items.
+        // To respect layer order, we should filter layerOrder list.
+        // Since this function takes explicit lists, we'll just draw them.
+        // Assuming itemsToDraw are passed in correct order or we should sort them?
+        // For now, simpler logic:
+        
         itemsToDraw.forEach(image => {
             ctx.save();
             const centerX = image.x + (image.width * image.scale) / 2;
@@ -159,7 +339,6 @@ const App: React.FC = () => {
             ctx.restore();
         });
         
-        // Draw Canvas Annotations
         canvasAnnosToDraw.forEach(anno => drawAnnotation(ctx, anno));
         ctx.restore();
 
@@ -220,6 +399,8 @@ const App: React.FC = () => {
             ctx.clip();
         }
 
+        // Respect Layer Order for clipboard copy? 
+        // Ideal but let's stick to simple render for now.
         itemsToDraw.forEach(image => {
             ctx.save();
             const centerX = image.x + (image.width * image.scale) / 2;
@@ -264,6 +445,7 @@ const App: React.FC = () => {
             setImages(prevState.images);
             setGroups(prevState.groups);
             setCanvasAnnotations(prevState.canvasAnnotations);
+            setLayerOrder(prevState.layerOrder);
             setSelectedImageIds(prevState.selectedImageIds);
             setSelectedAnnotations(prevState.selectedAnnotations);
             setSelectedLayerId(prevState.selectedLayerId);
@@ -277,6 +459,7 @@ const App: React.FC = () => {
             setImages(nextState.images);
             setGroups(nextState.groups);
             setCanvasAnnotations(nextState.canvasAnnotations);
+            setLayerOrder(nextState.layerOrder);
             setSelectedImageIds(nextState.selectedImageIds);
             setSelectedAnnotations(nextState.selectedAnnotations);
             setSelectedLayerId(nextState.selectedLayerId);
@@ -286,9 +469,10 @@ const App: React.FC = () => {
 
     const deleteGroup = useCallback((id: string) => {
         const newGroups = groups.filter(g => g.id !== id);
-        pushHistory({ groups: newGroups });
+        const newLayerOrder = layerOrder.filter(lid => lid !== id);
+        pushHistory({ groups: newGroups, layerOrder: newLayerOrder });
         setSelectedLayerId(null);
-    }, [groups, pushHistory]);
+    }, [groups, layerOrder, pushHistory]);
 
     const handleUncrop = useCallback((imageIds: string[]) => {
         const idsToUncrop = new Set(imageIds);
@@ -326,16 +510,18 @@ const App: React.FC = () => {
     const deleteImage = useCallback((id: string) => {
       const newImages = images.filter(img => img.id !== id);
       const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(imgId => imgId !== id) })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
-      pushHistory({ images: newImages, groups: newGroups, selectedImageIds: selectedImageIds.filter(selId => selId !== id), selectedLayerId: null });
-    }, [pushHistory, images, groups, selectedImageIds]);
+      const newLayerOrder = layerOrder.filter(lid => lid !== id);
+      pushHistory({ images: newImages, groups: newGroups, layerOrder: newLayerOrder, selectedImageIds: selectedImageIds.filter(selId => selId !== id), selectedLayerId: null });
+    }, [pushHistory, images, groups, layerOrder, selectedImageIds]);
   
     const deleteSelectedImages = useCallback(() => {
       if (selectedImageIds.length === 0) return;
       const newImages = images.filter(img => !selectedImageIds.includes(img.id));
       const newGroups = groups.map(g => ({ ...g, imageIds: g.imageIds.filter(id => !selectedImageIds.includes(id)) })).filter(g => g.imageIds.length > 0 || g.groupIds.length > 0);
+      const newLayerOrder = layerOrder.filter(id => !selectedImageIds.includes(id));
       
-      pushHistory({ images: newImages, groups: newGroups, selectedImageIds: [], selectedLayerId: null });
-    }, [pushHistory, images, groups, selectedImageIds]);
+      pushHistory({ images: newImages, groups: newGroups, layerOrder: newLayerOrder, selectedImageIds: [], selectedLayerId: null });
+    }, [pushHistory, images, groups, layerOrder, selectedImageIds]);
   
     const addAnnotation = useCallback((imageId: string, annotation: Annotation) => {
       const newImages = images.map(img => {
@@ -349,8 +535,9 @@ const App: React.FC = () => {
 
     const addCanvasAnnotation = useCallback((annotation: Annotation) => {
         const newAnnotations = [...canvasAnnotations, annotation];
-        pushHistory({ canvasAnnotations: newAnnotations });
-    }, [pushHistory, canvasAnnotations]);
+        const newLayerOrder = [...layerOrder, annotation.id];
+        pushHistory({ canvasAnnotations: newAnnotations, layerOrder: newLayerOrder });
+    }, [pushHistory, canvasAnnotations, layerOrder]);
 
     const updateSelectedAnnotations = useCallback((changes: Partial<Annotation>) => {
          const newImages = images.map(img => ({
@@ -390,9 +577,10 @@ const App: React.FC = () => {
       });
   
       const newCanvasAnnotations = canvasAnnotations.filter(anno => !canvasAnnotationIds.includes(anno.id));
+      const newLayerOrder = layerOrder.filter(id => !canvasAnnotationIds.includes(id));
   
-      pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnotations, selectedAnnotations: [] });
-    }, [pushHistory, images, canvasAnnotations, selectedAnnotations]);
+      pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnotations, layerOrder: newLayerOrder, selectedAnnotations: [] });
+    }, [pushHistory, images, canvasAnnotations, selectedAnnotations, layerOrder]);
 
     const handleApplyCrop = useCallback(() => {
         if (!cropArea) return;
@@ -514,12 +702,16 @@ const App: React.FC = () => {
 
         const newImages = images.map(img => img.id === targetImageId ? { ...img, annotations: [...img.annotations, ...transformedAnnos] } : img);
         const newCanvasAnnos = canvasAnnotations.filter(a => !annotationIds.includes(a.id));
-        pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnos });
-    }, [images, canvasAnnotations, pushHistory]);
+        // Remove moved annotations from layerOrder
+        const newLayerOrder = layerOrder.filter(id => !annotationIds.includes(id));
+        
+        pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnos, layerOrder: newLayerOrder });
+    }, [images, canvasAnnotations, layerOrder, pushHistory]);
 
     const onReparentImageAnnotationsToCanvas = useCallback((selections: { annotationId: string; imageId: string }[]) => {
         const newCanvasAnnos = [...canvasAnnotations];
         let newImages = [...images];
+        const newLayerOrder = [...layerOrder];
 
         selections.forEach(sel => {
             const imgIndex = newImages.findIndex(i => i.id === sel.imageId);
@@ -552,9 +744,11 @@ const App: React.FC = () => {
             
             newCanvasAnnos.push(newAnno as Annotation);
             newImages[imgIndex] = { ...img, annotations: img.annotations.filter(a => a.id !== sel.annotationId) };
+            // Add to top of layer order
+            newLayerOrder.push(anno.id);
         });
-        pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnos });
-    }, [images, canvasAnnotations, pushHistory]);
+        pushHistory({ images: newImages, canvasAnnotations: newCanvasAnnos, layerOrder: newLayerOrder });
+    }, [images, canvasAnnotations, layerOrder, pushHistory]);
     
     const reparentImageAnnotationsToImage = useCallback((annotations: Array<{ annotationId: string; imageId: string }>, newImageId: string) => {
         const targetImage = images.find(i => i.id === newImageId);
@@ -624,7 +818,8 @@ const App: React.FC = () => {
                 }
             }
             if (newImages.length > 0) {
-                pushHistory({ images: [...images, ...newImages] });
+                const newLayerOrder = [...layerOrder, ...newImages.map(i => i.id)];
+                pushHistory({ images: [...images, ...newImages], layerOrder: newLayerOrder });
             }
             return;
         } else if (e.clipboardData?.items) {
@@ -652,7 +847,8 @@ const App: React.FC = () => {
              }
              if (hasImage && newImages.length > 0) {
                  e.preventDefault();
-                 pushHistory({ images: [...images, ...newImages] });
+                 const newLayerOrder = [...layerOrder, ...newImages.map(i => i.id)];
+                 pushHistory({ images: [...images, ...newImages], layerOrder: newLayerOrder });
                  return;
              }
         }
@@ -664,6 +860,7 @@ const App: React.FC = () => {
              const newSelections: AnnotationSelection[] = [];
              const canvasAnnosToAdd: Annotation[] = [];
              let newImages = [...images];
+             const newLayerOrder = [...layerOrder];
 
              clipboard.selections.forEach(sel => {
                  let anno: Annotation | undefined;
@@ -691,15 +888,16 @@ const App: React.FC = () => {
                          newSelections.push({ imageId: sourceImageId, annotationId: newAnno.id });
                      } else {
                          canvasAnnosToAdd.push(newAnno as Annotation);
+                         newLayerOrder.push(newAnno.id);
                          newSelections.push({ imageId: null, annotationId: newAnno.id });
                      }
                  }
              });
              
              setSelectedAnnotations(newSelections);
-             pushHistory({ images: newImages, canvasAnnotations: [...canvasAnnotations, ...canvasAnnosToAdd] });
+             pushHistory({ images: newImages, canvasAnnotations: [...canvasAnnotations, ...canvasAnnosToAdd], layerOrder: newLayerOrder });
         }
-    }, [clipboard, images, canvasAnnotations, viewTransform, pushHistory]);
+    }, [clipboard, images, canvasAnnotations, viewTransform, layerOrder, pushHistory]);
 
     useEffect(() => {
         window.addEventListener('paste', handlePaste);
@@ -777,36 +975,77 @@ const App: React.FC = () => {
     }, [selectedAnnotations, images, canvasAnnotations]);
 
     const visualLayerOrder = useMemo(() => {
-        const imageIdToParent = new Map<string, string>();
-        const groupIdToParent = new Map<string, string>();
-        groups.forEach(g => {
-            g.imageIds.forEach(id => imageIdToParent.set(id, g.id));
-            g.groupIds.forEach(id => groupIdToParent.set(id, g.id));
-        });
+        // Determine layer structure based on layerOrder (Z-index stack)
+        // Groups complicate this as they are logical wrappers.
+        // If a group is top-level, it appears in the list.
+        // If an image is in layerOrder, it appears in list (if not in group).
+        // If a canvasAnnotation is in layerOrder, it appears in list.
         
-        const topLevelImages = images.filter(i => !imageIdToParent.has(i.id));
-        const topLevelGroups = groups.filter(g => !groupIdToParent.has(g.id));
-    
-        const allTopLevel: (CanvasImage | Group)[] = [...topLevelImages, ...topLevelGroups];
-    
-        const itemsWithIndices: { item: (CanvasImage | Group), index: number }[] = [];
-        images.forEach((img, index) => {
-            if (!imageIdToParent.has(img.id)) {
-                itemsWithIndices.push({ item: img, index });
-            }
-        });
-        groups.forEach((group, index) => {
-            if (!groupIdToParent.has(group.id)) {
-                itemsWithIndices.push({ item: group, index: images.length + groups.length + index });
-            }
-        });
-        
-        itemsWithIndices.sort((a, b) => a.index - b.index);
-    
-        return itemsWithIndices.map(i => i.item);
-    }, [groups, images]);
+        // Mapping from ID to object
+        const itemMap = new Map<string, CanvasImage | Group | Annotation>();
+        images.forEach(i => itemMap.set(i.id, i));
+        groups.forEach(g => itemMap.set(g.id, g));
+        canvasAnnotations.forEach(a => itemMap.set(a.id, a));
 
-    // IMPLEMENTATION OF MISSING HANDLERS
+        // Build ordered list. For groups, where do they sit? 
+        // Groups themselves don't have explicit Z-order in layerOrder unless we put them there.
+        // Current implementation: layerOrder contains Image IDs and Annotation IDs.
+        // Groups are derived.
+        // If we want unified list, we should probably rely on the visual structure defined by `groups` + `layerOrder`.
+        // Let's construct the visual list:
+        // Iterate layerOrder (bottom to top). If item is in a group, ignore (group handles it). 
+        // If item is standalone, add to list.
+        // Where do groups appear? 
+        // Strategy: If we encounter an item that belongs to a group, we add the GROUP at that position (if not already added).
+        // This effectively puts the group at the Z-index of its lowest member? Or highest?
+        // Let's use lowest member for now.
+        
+        const result: (CanvasImage | Group | Annotation)[] = [];
+        const processedIds = new Set<string>();
+        const itemToGroupMap = new Map<string, string>();
+        groups.forEach(g => {
+            g.imageIds.forEach(id => itemToGroupMap.set(id, g.id));
+            g.groupIds.forEach(id => itemToGroupMap.set(id, g.id));
+        });
+
+        layerOrder.forEach(id => {
+            if (processedIds.has(id)) return;
+            
+            const groupId = itemToGroupMap.get(id);
+            if (groupId) {
+                if (!processedIds.has(groupId)) {
+                    const group = groups.find(g => g.id === groupId);
+                    if (group) {
+                        result.push(group);
+                        processedIds.add(groupId);
+                        // Mark all members as processed so they don't appear separately at top level
+                        // Note: This hides member Z-order specifics in the main list, which is standard for groups.
+                        // To support interleaved group members, groups shouldn't be monolithic in Z-order.
+                        // But standard behavior is Group = Z-plane.
+                        // So we assume all group members are neighbors in layerOrder? 
+                        // If not, this visual representation simplifies it.
+                    }
+                }
+            } else {
+                const item = itemMap.get(id);
+                if (item) {
+                    result.push(item);
+                    processedIds.add(id);
+                }
+            }
+        });
+        
+        // Add any groups/items not in layerOrder (orphans? shouldn't happen if logic is correct)
+        // New items might not be in layerOrder yet if logic fails, so fallback:
+        images.forEach(i => {
+            if (!processedIds.has(i.id) && !itemToGroupMap.has(i.id)) result.push(i);
+        });
+        canvasAnnotations.forEach(a => {
+            if (!processedIds.has(a.id)) result.push(a);
+        });
+        
+        return result;
+    }, [layerOrder, images, groups, canvasAnnotations]);
 
     const handleFileChange = useCallback(async (files: FileList | null) => {
         if (!files) return;
@@ -828,9 +1067,10 @@ const App: React.FC = () => {
             }
         }
         if (newImages.length > 0) {
-             pushHistory({ images: [...images, ...newImages] });
+             const newLayerOrder = [...layerOrder, ...newImages.map(i => i.id)];
+             pushHistory({ images: [...images, ...newImages], layerOrder: newLayerOrder });
         }
-    }, [images, viewTransform, pushHistory]);
+    }, [images, viewTransform, layerOrder, pushHistory]);
 
     const handleMoveSelectedImages = useCallback((delta: Point) => {
          setImages(prev => prev.map(img => {
@@ -1271,8 +1511,9 @@ const App: React.FC = () => {
                     setCanvasAnnotations([]);
                     setSelectedImageIds([]);
                     setSelectedAnnotations([]);
+                    setLayerOrder([]);
                     setCropArea(null);
-                    pushHistory({ images: [], groups: [], canvasAnnotations: [], selectedImageIds: [], selectedAnnotations: [] });
+                    pushHistory({ images: [], groups: [], canvasAnnotations: [], layerOrder: [], selectedImageIds: [], selectedAnnotations: [] });
                 }}
                 onDownloadAllCanvas={() => renderAndDownload(images, canvasAnnotations, null, `canvas-export.${exportFormat}`)}
                 onUncrop={handleUncrop}
@@ -1344,6 +1585,7 @@ const App: React.FC = () => {
                         lastCanvasMousePosition={lastCanvasMousePosition}
                         onReparentImageAnnotationsToCanvas={onReparentImageAnnotationsToCanvas}
                         selectedLayerId={selectedLayerId}
+                        layerOrder={layerOrder}
                      />
                      <FloatingAnnotationEditor
                         style={{}}
@@ -1387,7 +1629,7 @@ const App: React.FC = () => {
                 onSelectImages={(ids, keep) => { /* impl */ }}
                 onDeleteImage={deleteImage}
                 onReorderTopLevelLayer={() => { /* impl */ }}
-                onReorderLayer={() => { /* impl */ }}
+                onReorderLayer={reorderLayers}
                 selectedAnnotations={selectedAnnotations}
                 onSelectAnnotation={(imgId, annoId, opts) => {
                     const newSelection = { imageId: imgId, annotationId: annoId };
@@ -1416,6 +1658,7 @@ const App: React.FC = () => {
                 onReparentImageAnnotationsToCanvas={onReparentImageAnnotationsToCanvas}
                 onReparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
                 selectedImageIds={selectedImageIds}
+                selectedGroupIds={selectedImageIds.filter(id => groups.some(g=>g.id===id))} // Hacky derivation
                 selectedLayerId={selectedLayerId}
                 parentImageIds={new Set()}
                 expandedImageAnnotationIds={expandedImageAnnotationIds}
@@ -1426,6 +1669,9 @@ const App: React.FC = () => {
                 onReverseLayerOrder={() => { /* impl */ }}
                 onAddTag={() => { /* impl */ }}
                 onRemoveTag={() => { /* impl */ }}
+                onToggleVisibility={toggleLayerVisibility}
+                onToggleLock={toggleLayerLock}
+                onDuplicateLayer={duplicateLayer}
             />
         </div>
     );

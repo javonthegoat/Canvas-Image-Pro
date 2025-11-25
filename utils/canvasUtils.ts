@@ -1,4 +1,5 @@
 
+
 import { CanvasImage, Rect, Point, Annotation, TextAnnotation, Group, AspectRatio, FreehandAnnotation, RectAnnotation, CircleAnnotation, ArrowAnnotation, LineAnnotation } from '../types';
 
 function hexToRgba(hex: string, opacity: number): string {
@@ -22,6 +23,7 @@ export const getImagesBounds = (imagesToBound: CanvasImage[]): Rect | null => {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
   imagesToBound.forEach(image => {
+      if (image.visible === false) return;
       const { x, y, width, scale, rotation } = image;
       const w = width * scale;
       const h = image.height * scale;
@@ -53,6 +55,8 @@ export const getGroupBounds = (
     allGroups: Group[],
     allImages: CanvasImage[]
 ): Rect | null => {
+    if (group.visible === false) return null;
+    
     const imageMap = new Map(allImages.map(i => [i.id, i]));
     const groupMap = new Map(allGroups.map(g => [g.id, g]));
 
@@ -150,6 +154,10 @@ export const transformGlobalToLocal = (globalPoint: Point, image: CanvasImage): 
 };
 
 export function getAnnotationPrimitiveBounds(annotation: Annotation, ctx: CanvasRenderingContext2D, options?: { ignoreStyles?: boolean }): Rect {
+    const strokePadding = (annotation.strokeWidth || 1) / 2;
+    const hitPadding = 15; // Increased hit area for easier selection
+    const totalPadding = strokePadding + hitPadding;
+
     switch (annotation.type) {
         case 'freehand': {
             if (annotation.points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
@@ -160,21 +168,30 @@ export function getAnnotationPrimitiveBounds(annotation: Annotation, ctx: Canvas
                 maxX = Math.max(maxX, p.x);
                 maxY = Math.max(maxY, p.y);
             });
-            return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+            return { 
+                x: minX - totalPadding, 
+                y: minY - totalPadding, 
+                width: (maxX - minX) + totalPadding * 2, 
+                height: (maxY - minY) + totalPadding * 2 
+            };
         }
         case 'rect':
+            const rX = annotation.width < 0 ? annotation.x + annotation.width : annotation.x;
+            const rY = annotation.height < 0 ? annotation.y + annotation.height : annotation.y;
+            const rW = Math.abs(annotation.width);
+            const rH = Math.abs(annotation.height);
             return {
-                x: annotation.x,
-                y: annotation.y,
-                width: annotation.width,
-                height: annotation.height,
+                x: rX - totalPadding,
+                y: rY - totalPadding,
+                width: rW + totalPadding * 2,
+                height: rH + totalPadding * 2,
             };
         case 'circle':
              return {
-                x: annotation.x - annotation.radius,
-                y: annotation.y - annotation.radius,
-                width: annotation.radius * 2,
-                height: annotation.radius * 2,
+                x: annotation.x - annotation.radius - totalPadding,
+                y: annotation.y - annotation.radius - totalPadding,
+                width: (annotation.radius * 2) + totalPadding * 2,
+                height: (annotation.radius * 2) + totalPadding * 2,
             };
         case 'text': {
              ctx.save();
@@ -186,10 +203,10 @@ export function getAnnotationPrimitiveBounds(annotation: Annotation, ctx: Canvas
              const height = lineHeight * lines.length;
              ctx.restore();
              return {
-                x: annotation.x,
-                y: annotation.y,
-                width: maxWidth,
-                height: height,
+                x: annotation.x - hitPadding,
+                y: annotation.y - hitPadding,
+                width: maxWidth + hitPadding * 2,
+                height: height + hitPadding * 2,
              };
         }
         case 'arrow':
@@ -198,14 +215,88 @@ export function getAnnotationPrimitiveBounds(annotation: Annotation, ctx: Canvas
              const minY = Math.min(annotation.start.y, annotation.end.y);
              const maxX = Math.max(annotation.start.x, annotation.end.x);
              const maxY = Math.max(annotation.start.y, annotation.end.y);
-             return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+             
+             let extraHeadPadding = 0;
+             if (annotation.type === 'arrow') {
+                 // Account for arrowhead size + rotation possibilities
+                 extraHeadPadding = 25 + (annotation.strokeWidth || 0);
+             }
+
+             return { 
+                 x: minX - totalPadding - extraHeadPadding, 
+                 y: minY - totalPadding - extraHeadPadding, 
+                 width: (maxX - minX) + (totalPadding + extraHeadPadding) * 2, 
+                 height: (maxY - minY) + (totalPadding + extraHeadPadding) * 2 
+             };
         default:
              return { x: 0, y: 0, width: 0, height: 0 };
     }
 }
 
 export function getAnnotationBounds(annotation: Annotation, ctx: CanvasRenderingContext2D, options?: { ignoreStyles?: boolean }): Rect {
-    return getAnnotationPrimitiveBounds(annotation, ctx, options);
+    const primitiveBounds = getAnnotationPrimitiveBounds(annotation, ctx, options);
+    
+    let { x, y, width, height } = primitiveBounds;
+    // Ensure bounds are normalized
+    if (width < 0) { x += width; width = Math.abs(width); }
+    if (height < 0) { y += height; height = Math.abs(height); }
+
+    if (annotation.rotation === 0 && annotation.scale === 1) {
+        return { x, y, width, height };
+    }
+
+    // Calculate center of rotation
+    let cx = 0, cy = 0;
+    if (annotation.type === 'rect') { 
+        // Re-calculate center from raw properties to be consistent with draw
+        cx = annotation.x + annotation.width/2; 
+        cy = annotation.y + annotation.height/2; 
+    } else if (annotation.type === 'circle') { 
+        cx = annotation.x; 
+        cy = annotation.y; 
+    } else if (annotation.type === 'text') { 
+        // Approximate center from primitive bounds (which includes padding, but should be close enough)
+        cx = x + width/2; 
+        cy = y + height/2; 
+    } else if (annotation.type === 'freehand') {
+         cx = x + width/2; 
+         cy = y + height/2;
+    } else if (annotation.type === 'arrow' || annotation.type === 'line') {
+         cx = (annotation.start.x + annotation.end.x) / 2;
+         cy = (annotation.start.y + annotation.end.y) / 2;
+    }
+
+    // Get 4 corners of the AABB
+    const corners = [
+        { x: x, y: y },
+        { x: x + width, y: y },
+        { x: x + width, y: y + height },
+        { x: x, y: y + height }
+    ];
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    corners.forEach(p => {
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        
+        const rad = annotation.rotation * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        
+        const rx = dx * cos - dy * sin;
+        const ry = dx * sin + dy * cos;
+
+        const fx = cx + rx * annotation.scale;
+        const fy = cy + ry * annotation.scale;
+
+        minX = Math.min(minX, fx);
+        minY = Math.min(minY, fy);
+        maxX = Math.max(maxX, fx);
+        maxY = Math.max(maxY, fy);
+    });
+
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 export const drawAnnotation = (ctx: CanvasRenderingContext2D, annotation: Annotation) => {
@@ -338,6 +429,8 @@ export const getMultiAnnotationBounds = (selections: { imageId: string | null; a
 
     selections.forEach(sel => {
         const image = sel.imageId ? images.find(img => img.id === sel.imageId) : null;
+        if (image && image.visible === false) return;
+
         const annotation = image ? image.annotations.find(a => a.id === sel.annotationId) : canvasAnnotations.find(a => a.id === sel.annotationId);
         
         if (annotation) {
@@ -434,7 +527,7 @@ export const drawCanvas = (
     const imageMap = new Map(images.map(i => [i.id, i]));
     const drawImageItem = (id: string) => {
         const image = imageMap.get(id);
-        if (!image) return;
+        if (!image || image.visible === false) return;
 
         ctx.save();
         const centerX = image.x + (image.width * image.scale) / 2;
@@ -538,6 +631,7 @@ export const drawCanvas = (
 
     // Draw Groups Labels/Bounds
     groups.forEach(group => {
+        if (group.visible === false) return;
         const bounds = getGroupBounds(group, groups, images);
         if (bounds) {
             ctx.save();

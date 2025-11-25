@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
-import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect, getCropHandles, CropHandle } from '../utils/canvasUtils';
+import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect, getCropHandles, CropHandle, getImagesBounds } from '../utils/canvasUtils';
 import { rgbToHex } from '../utils/colorUtils';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
@@ -40,6 +40,7 @@ interface CanvasWrapperProps {
   lastCanvasMousePosition: React.MutableRefObject<Point>;
   onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string; imageId: string }>) => void;
   selectedLayerId: string | null;
+  layerOrder: string[];
 }
 
 type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end' | 'scale-multi-annotation' | 'rotate-multi-annotation';
@@ -103,6 +104,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   updateMultipleAnnotationsForInteraction,
   selectedAnnotationObjects,
   selectedLayerId,
+  layerOrder,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -317,6 +319,11 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
          }
     };
 
+    // Check Top-Most based on visual order logic? Or just reverse iterate arrays?
+    // Reverse iterate images is bottom-to-top -> top-to-bottom check.
+    // Unified layer check should ideally use layerOrder.
+    // For now, keeping this optimization as `images` contains all images.
+    
     for (const image of [...images].reverse()) {
         const localPointInImage = getUnboundedLocalPoint(canvasPoint, image);
         for (const annotation of [...image.annotations].reverse()) {
@@ -339,8 +346,8 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     const canvas = internalCanvasRef.current;
     const ctx = contextRef.current;
     if (!canvas || !ctx) return;
-    drawCanvas(ctx, canvas, images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId);
-  }, [images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId, canvasSize]);
+    drawCanvas(ctx, canvas, images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId, layerOrder);
+  }, [images, selectedImageIds, cropArea, viewTransform, drawingAnnotation, selectedAnnotations, marqueeRect, groups, canvasAnnotations, dropTargetImageId, selectedLayerId, canvasSize, layerOrder]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -617,6 +624,17 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   
       if (clickedImage) {
         const isMultiSelectModifier = e.shiftKey || e.metaKey || e.ctrlKey;
+        // If Ctrl/Cmd is held, we might want to start marquee selection instead of moving the image,
+        // especially if the user wants to select annotations ON TOP of the image.
+        // Standard behavior: Click+Drag on object = move. 
+        // Override: If user wants to box select over an image, they can hold Ctrl/Cmd (if we define that behavior).
+        // Let's allow marquee start if Ctrl/Cmd is pressed.
+        if (e.ctrlKey || e.metaKey) {
+             setInteraction({ mode: 'marquee-select', startPoint: canvasPoint, shiftKey: e.shiftKey, ctrlKey: true });
+             setMarqueeRect({ x: canvasPoint.x, y: canvasPoint.y, width: 0, height: 0 });
+             return;
+        }
+
         const isAlreadySelected = selectedImageIds.includes(clickedImage.id);
   
         if (isAlreadySelected && !isMultiSelectModifier) {
@@ -868,13 +886,49 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         const rw = Math.abs(width);
         const rh = Math.abs(height);
         const selectionRect = { x: rx, y: ry, width: rw, height: rh };
-        const selectedImages = images.filter(img => rectIntersect(selectionRect, { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale })).map(img => img.id);
+        
+        const selectedImages = images.filter(img => {
+            const bounds = getImagesBounds([img]);
+            return bounds ? rectIntersect(selectionRect, bounds) : false;
+        }).map(img => img.id);
+
         const selectedAnnos: AnnotationSelection[] = [];
+        
+        // Check Canvas Annotations
         canvasAnnotations.forEach(anno => {
-            if (rectIntersect(selectionRect, getAnnotationPrimitiveBounds(anno, contextRef.current!))) {
+            if (rectIntersect(selectionRect, getAnnotationBounds(anno, contextRef.current!))) {
                 selectedAnnos.push({ imageId: null, annotationId: anno.id });
             }
         });
+
+        // Check Image Annotations
+        images.forEach(img => {
+            if (img.visible === false || img.locked) return;
+            img.annotations.forEach(anno => {
+                const localBounds = getAnnotationBounds(anno, contextRef.current!);
+                // Calculate global bounds for the local annotation
+                const corners = [
+                    { x: localBounds.x, y: localBounds.y },
+                    { x: localBounds.x + localBounds.width, y: localBounds.y },
+                    { x: localBounds.x + localBounds.width, y: localBounds.y + localBounds.height },
+                    { x: localBounds.x, y: localBounds.y + localBounds.height }
+                ];
+                
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                corners.forEach(c => {
+                    const gp = transformLocalToGlobal(c, img);
+                    minX = Math.min(minX, gp.x);
+                    minY = Math.min(minY, gp.y);
+                    maxX = Math.max(maxX, gp.x);
+                    maxY = Math.max(maxY, gp.y);
+                });
+                
+                if (rectIntersect(selectionRect, { x: minX, y: minY, width: maxX - minX, height: maxY - minY })) {
+                    selectedAnnos.push({ imageId: img.id, annotationId: anno.id });
+                }
+            });
+        });
+
         onBoxSelect(selectedImages, selectedAnnos, { shiftKey: interaction.shiftKey, ctrlKey: interaction.ctrlKey });
     }
 

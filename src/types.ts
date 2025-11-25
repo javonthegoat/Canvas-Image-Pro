@@ -102,6 +102,8 @@ export interface CanvasImage {
   cropRect: Rect | null;
   groups?: Group[];
   tags?: string[];
+  visible?: boolean;
+  locked?: boolean;
 }
 
 export type AspectRatio = 'free' | '1:1' | '4:3' | '16:9';
@@ -115,6 +117,8 @@ export interface Group {
   groupIds: string[];
   isExpanded: boolean;
   parentId: string | null;
+  visible?: boolean;
+  locked?: boolean;
 }
 
 export type AnnotationSelection = { imageId: string | null; annotationId: string; };

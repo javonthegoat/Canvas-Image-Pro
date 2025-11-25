@@ -13,6 +13,7 @@ interface AppState {
     groups: Group[];
     canvasAnnotations: Annotation[];
     selectedImageIds: string[];
+    selectedGroupIds: string[];
     selectedAnnotations: AnnotationSelection[];
     selectedLayerId: string | null;
 }
@@ -23,6 +24,7 @@ const App: React.FC = () => {
     const [groups, setGroups] = useState<Group[]>([]);
     const [canvasAnnotations, setCanvasAnnotations] = useState<Annotation[]>([]);
     const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
+    const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
     const [selectedAnnotations, setSelectedAnnotations] = useState<AnnotationSelection[]>([]);
     const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
     const [cropArea, setCropArea] = useState<Rect | null>(null);
@@ -59,10 +61,11 @@ const App: React.FC = () => {
         groups: [],
         canvasAnnotations: [],
         selectedImageIds: [],
+        selectedGroupIds: [],
         selectedAnnotations: [],
         selectedLayerId: null
     });
-    appStateRef.current = { images, groups, canvasAnnotations, selectedImageIds, selectedAnnotations, selectedLayerId };
+    appStateRef.current = { images, groups, canvasAnnotations, selectedImageIds, selectedGroupIds, selectedAnnotations, selectedLayerId };
 
     // Helpers
     const pushHistory = useCallback((newState: Partial<AppState>) => {
@@ -78,6 +81,7 @@ const App: React.FC = () => {
         if (newState.groups) setGroups(newState.groups);
         if (newState.canvasAnnotations) setCanvasAnnotations(newState.canvasAnnotations);
         if (newState.selectedImageIds) setSelectedImageIds(newState.selectedImageIds);
+        if (newState.selectedGroupIds) setSelectedGroupIds(newState.selectedGroupIds);
         if (newState.selectedAnnotations) setSelectedAnnotations(newState.selectedAnnotations);
         if (newState.selectedLayerId !== undefined) setSelectedLayerId(newState.selectedLayerId);
     }, [history, historyIndex]);
@@ -86,6 +90,7 @@ const App: React.FC = () => {
         const current = appStateRef.current!;
         const updates = updater(current);
         if (updates.selectedImageIds !== undefined) setSelectedImageIds(updates.selectedImageIds);
+        if (updates.selectedGroupIds !== undefined) setSelectedGroupIds(updates.selectedGroupIds);
         if (updates.selectedAnnotations !== undefined) setSelectedAnnotations(updates.selectedAnnotations);
         if (updates.selectedLayerId !== undefined) setSelectedLayerId(updates.selectedLayerId);
         if (updates.images !== undefined) setImages(updates.images);
@@ -95,6 +100,150 @@ const App: React.FC = () => {
 
     const resetLastArrangement = useCallback(() => {}, []);
     
+    // Layer Manipulation Handlers
+    const reorderLayers = useCallback((draggedId: string, targetId: string, position: 'before' | 'after' | 'inside') => {
+        const allImages = [...images];
+        const draggedImageIndex = allImages.findIndex(i => i.id === draggedId);
+        
+        if (draggedImageIndex !== -1) {
+            // Moving an image
+            const [draggedImage] = allImages.splice(draggedImageIndex, 1);
+            
+            if (position === 'inside') {
+                const targetGroup = groups.find(g => g.id === targetId);
+                if (targetGroup) {
+                    const newGroups = groups.map(g => g.id === targetId ? { ...g, imageIds: [...g.imageIds, draggedId] } : g);
+                    setGroups(newGroups); 
+                    allImages.push(draggedImage);
+                    pushHistory({ images: allImages, groups: newGroups });
+                }
+                return;
+            }
+
+            const targetImageIndex = allImages.findIndex(i => i.id === targetId);
+            if (targetImageIndex !== -1) {
+                if (position === 'before') {
+                    allImages.splice(targetImageIndex + 1, 0, draggedImage);
+                } else {
+                    allImages.splice(targetImageIndex, 0, draggedImage);
+                }
+                pushHistory({ images: allImages });
+            }
+        }
+    }, [images, groups, pushHistory]);
+
+    const toggleLayerVisibility = useCallback((id: string, type: 'image' | 'group') => {
+        if (type === 'image') {
+            const newImages = images.map(img => img.id === id ? { ...img, visible: img.visible === undefined ? false : !img.visible } : img);
+            setImages(newImages); 
+        } else {
+            const newGroups = groups.map(g => g.id === id ? { ...g, visible: g.visible === undefined ? false : !g.visible } : g);
+            setGroups(newGroups);
+        }
+    }, [images, groups]);
+
+    const toggleLayerLock = useCallback((id: string, type: 'image' | 'group') => {
+        if (type === 'image') {
+            const newImages = images.map(img => img.id === id ? { ...img, locked: img.locked === undefined ? true : !img.locked } : img);
+            setImages(newImages);
+        } else {
+            const newGroups = groups.map(g => g.id === id ? { ...g, locked: g.locked === undefined ? true : !g.locked } : g);
+            setGroups(newGroups);
+        }
+    }, [images, groups]);
+
+    const duplicateLayer = useCallback(() => {
+        if (selectedLayerId) {
+            // Duplicating a specific layer (Image or Group)
+            const imageToDup = images.find(i => i.id === selectedLayerId);
+            const groupToDup = groups.find(g => g.id === selectedLayerId);
+
+            if (imageToDup) {
+                const newImage = { ...imageToDup, id: `img-${Date.now()}-${Math.random()}`, name: `${imageToDup.name} Copy`, x: imageToDup.x + 10, y: imageToDup.y + 10 };
+                newImage.annotations = newImage.annotations.map(a => ({ ...a, id: `anno-${Date.now()}-${Math.random()}` }));
+                
+                let newImages = [...images];
+                const index = newImages.findIndex(i => i.id === imageToDup.id);
+                newImages.splice(index + 1, 0, newImage); // Insert after
+
+                let newGroups = [...groups];
+                // Check if original was in a group
+                newGroups = newGroups.map(g => {
+                    if (g.imageIds.includes(imageToDup.id)) {
+                        return { ...g, imageIds: [...g.imageIds, newImage.id] };
+                    }
+                    return g;
+                });
+
+                pushHistory({ images: newImages, groups: newGroups, selectedImageIds: [newImage.id], selectedLayerId: newImage.id });
+            } else if (groupToDup) {
+               // Simplified group duplication: Create new group, copy direct children images.
+               // Does not support deep nested groups yet for simplicity.
+               const newGroupId = `group-${Date.now()}-${Math.random()}`;
+               const newImages = [...images];
+               const newChildIds: string[] = [];
+
+               groupToDup.imageIds.forEach(childId => {
+                   const originalImg = images.find(i => i.id === childId);
+                   if (originalImg) {
+                       const newImg = { ...originalImg, id: `img-${Date.now()}-${Math.random()}`, name: `${originalImg.name} Copy`, x: originalImg.x + 10, y: originalImg.y + 10 };
+                       newImg.annotations = newImg.annotations.map(a => ({...a, id: `anno-${Date.now()}-${Math.random()}`}));
+                       newImages.push(newImg); // Add to top
+                       newChildIds.push(newImg.id);
+                   }
+               });
+
+               const newGroup: Group = {
+                   ...groupToDup,
+                   id: newGroupId,
+                   name: `${groupToDup.name} Copy`,
+                   imageIds: newChildIds,
+                   groupIds: [] // Not deep copying nested groups for now
+               };
+
+               pushHistory({ images: newImages, groups: [...groups, newGroup], selectedLayerId: newGroupId });
+            }
+        } else if (selectedAnnotations.length > 0) {
+             // Reuse clipboard copy/paste logic essentially
+             const newSelections: AnnotationSelection[] = [];
+             const canvasAnnosToAdd: Annotation[] = [];
+             let newImages = [...images];
+
+             selectedAnnotations.forEach(sel => {
+                 let anno: Annotation | undefined;
+                 let sourceImageId: string | null = sel.imageId;
+                 
+                 if (sel.imageId) {
+                     const img = newImages.find(i => i.id === sel.imageId);
+                     anno = img?.annotations.find(a => a.id === sel.annotationId);
+                 } else {
+                     anno = canvasAnnotations.find(a => a.id === sel.annotationId);
+                 }
+                 
+                 if (anno) {
+                     const newAnno: any = { ...anno, id: `anno-${Date.now()}-${Math.random()}` };
+                     if ('x' in newAnno) { newAnno.x += 20; newAnno.y += 20; }
+                     else if ('points' in newAnno) { newAnno.points = newAnno.points.map((p: Point) => ({ x: p.x + 20, y: p.y + 20 })); }
+                     else if ('start' in newAnno) { 
+                         newAnno.start = { x: newAnno.start.x + 20, y: newAnno.start.y + 20 }; 
+                         newAnno.end = { x: newAnno.end.x + 20, y: newAnno.end.y + 20 }; 
+                     }
+
+                     if (sourceImageId && newImages.some(i => i.id === sourceImageId)) {
+                         newImages = newImages.map(i => i.id === sourceImageId ? { ...i, annotations: [...i.annotations, newAnno as Annotation] } : i);
+                         newSelections.push({ imageId: sourceImageId, annotationId: newAnno.id });
+                     } else {
+                         canvasAnnosToAdd.push(newAnno as Annotation);
+                         newSelections.push({ imageId: null, annotationId: newAnno.id });
+                     }
+                 }
+             });
+             
+             setSelectedAnnotations(newSelections);
+             pushHistory({ images: newImages, canvasAnnotations: [...canvasAnnotations, ...canvasAnnosToAdd] });
+        }
+    }, [selectedLayerId, images, groups, selectedAnnotations, canvasAnnotations, pushHistory]);
+
     const renderAndDownload = useCallback(async (
         itemsToDraw: CanvasImage[], 
         canvasAnnosToDraw: Annotation[], 
@@ -139,6 +288,7 @@ const App: React.FC = () => {
 
         // Draw Images
         itemsToDraw.forEach(image => {
+            if (image.visible === false) return;
             ctx.save();
             const centerX = image.x + (image.width * image.scale) / 2;
             const centerY = image.y + (image.height * image.scale) / 2;
@@ -185,6 +335,7 @@ const App: React.FC = () => {
             };
             bounds = normalizedCrop;
             itemsToDraw = images.filter(img => {
+                if (img.visible === false) return false;
                 const imgRect = { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale };
                 return rectIntersect(normalizedCrop, imgRect);
             });
@@ -196,7 +347,7 @@ const App: React.FC = () => {
                 });
             }
         } else if (selectedImageIds.length > 0) {
-            itemsToDraw = images.filter(img => selectedImageIds.includes(img.id));
+            itemsToDraw = images.filter(img => selectedImageIds.includes(img.id) && img.visible !== false);
             bounds = getImagesBounds(itemsToDraw);
         }
         
@@ -265,6 +416,7 @@ const App: React.FC = () => {
             setGroups(prevState.groups);
             setCanvasAnnotations(prevState.canvasAnnotations);
             setSelectedImageIds(prevState.selectedImageIds);
+            setSelectedGroupIds(prevState.selectedGroupIds);
             setSelectedAnnotations(prevState.selectedAnnotations);
             setSelectedLayerId(prevState.selectedLayerId);
             setHistoryIndex(historyIndex - 1);
@@ -278,6 +430,7 @@ const App: React.FC = () => {
             setGroups(nextState.groups);
             setCanvasAnnotations(nextState.canvasAnnotations);
             setSelectedImageIds(nextState.selectedImageIds);
+            setSelectedGroupIds(nextState.selectedGroupIds);
             setSelectedAnnotations(nextState.selectedAnnotations);
             setSelectedLayerId(nextState.selectedLayerId);
             setHistoryIndex(historyIndex + 1);
@@ -336,6 +489,12 @@ const App: React.FC = () => {
       
       pushHistory({ images: newImages, groups: newGroups, selectedImageIds: [], selectedLayerId: null });
     }, [pushHistory, images, groups, selectedImageIds]);
+
+    const deleteSelectedGroups = useCallback(() => {
+        if (selectedGroupIds.length === 0) return;
+        const newGroups = groups.filter(g => !selectedGroupIds.includes(g.id));
+        pushHistory({ groups: newGroups, selectedGroupIds: [], selectedLayerId: null });
+    }, [pushHistory, groups, selectedGroupIds]);
   
     const addAnnotation = useCallback((imageId: string, annotation: Annotation) => {
       const newImages = images.map(img => {
@@ -401,6 +560,8 @@ const App: React.FC = () => {
         let hasChanges = false;
 
         const newImages = images.map(img => {
+             if (img.visible === false || img.locked) return img;
+
              const p1 = transformGlobalToLocal({x: cropArea.x, y: cropArea.y}, img);
              const p2 = transformGlobalToLocal({x: cropArea.x + cropArea.width, y: cropArea.y}, img);
              const p3 = transformGlobalToLocal({x: cropArea.x, y: cropArea.y + cropArea.height}, img);
@@ -720,6 +881,9 @@ const App: React.FC = () => {
             } else if (selectedImageIds.length > 0) {
                 e.preventDefault();
                 deleteSelectedImages();
+            } else if (selectedGroupIds.length > 0) {
+                e.preventDefault();
+                deleteSelectedGroups();
             } else if (selectedLayerId && groups.some(g => g.id === selectedLayerId)) {
                 e.preventDefault();
                 deleteGroup(selectedLayerId);
@@ -758,20 +922,7 @@ const App: React.FC = () => {
   
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedImageIds, selectedAnnotations, selectedLayerId, groups, deleteSelectedImages, deleteSelectedAnnotations, deleteGroup, handleCopyToClipboard, handleUndo, handleRedo, cropArea, setActiveTool, handleApplyCrop]);
-
-    useEffect(() => {
-        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-            const hasContent = images.length > 0 || groups.length > 0 || canvasAnnotations.length > 0;
-            if (hasContent) {
-                e.preventDefault();
-                e.returnValue = '';
-            }
-        };
-
-        window.addEventListener('beforeunload', handleBeforeUnload);
-        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [images, groups, canvasAnnotations]);
+    }, [selectedImageIds, selectedAnnotations, selectedLayerId, selectedGroupIds, groups, deleteSelectedImages, deleteSelectedAnnotations, deleteGroup, deleteSelectedGroups, handleCopyToClipboard, handleUndo, handleRedo, cropArea, setActiveTool, handleApplyCrop]);
 
     // Derived props for components
     const selectedAnnotationObjects = useMemo(() => {
@@ -797,11 +948,6 @@ const App: React.FC = () => {
             g.groupIds.forEach(id => groupIdToParent.set(id, g.id));
         });
         
-        const topLevelImages = images.filter(i => !imageIdToParent.has(i.id));
-        const topLevelGroups = groups.filter(g => !groupIdToParent.has(g.id));
-    
-        const allTopLevel: (CanvasImage | Group)[] = [...topLevelImages, ...topLevelGroups];
-    
         const itemsWithIndices: { item: (CanvasImage | Group), index: number }[] = [];
         images.forEach((img, index) => {
             if (!imageIdToParent.has(img.id)) {
@@ -845,89 +991,6 @@ const App: React.FC = () => {
         }
     }, [images, viewTransform, pushHistory]);
 
-    const handleMoveSelectedImages = useCallback((delta: Point) => {
-         setImages(prev => prev.map(img => {
-             if (selectedImageIds.includes(img.id)) {
-                 return { ...img, x: img.x + delta.x, y: img.y + delta.y };
-             }
-             return img;
-         }));
-    }, [selectedImageIds]);
-
-    const handleMoveSelectedAnnotations = useCallback((delta: Point) => {
-        setCanvasAnnotations(prevAnnos => {
-            const selectedIds = new Set(selectedAnnotations.filter(s => s.imageId === null).map(s => s.annotationId));
-            if (selectedIds.size === 0) return prevAnnos;
-            return prevAnnos.map(anno => {
-                if (selectedIds.has(anno.id)) {
-                    switch (anno.type) {
-                        case 'arrow':
-                        case 'line':
-                            return { ...anno, start: { x: anno.start.x + delta.x, y: anno.start.y + delta.y }, end: { x: anno.end.x + delta.x, y: anno.end.y + delta.y } };
-                        case 'rect':
-                        case 'text':
-                        case 'circle':
-                            return { ...anno, x: anno.x + delta.x, y: anno.y + delta.y };
-                        case 'freehand':
-                            return { ...anno, points: anno.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y })) };
-                        default:
-                            return anno;
-                    }
-                }
-                return anno;
-            });
-        });
-    
-        setImages(prevImages => {
-            const imageUpdates = new Map<string, Set<string>>();
-            selectedAnnotations.forEach(sel => {
-                if (sel.imageId) {
-                    if (!imageUpdates.has(sel.imageId)) {
-                        imageUpdates.set(sel.imageId, new Set());
-                    }
-                    imageUpdates.get(sel.imageId)!.add(sel.annotationId);
-                }
-            });
-    
-            if (imageUpdates.size === 0) return prevImages;
-    
-            return prevImages.map(img => {
-                if (imageUpdates.has(img.id)) {
-                    const selectedAnnoIds = imageUpdates.get(img.id)!;
-                    
-                    const rad = -img.rotation * Math.PI / 180;
-                    const cos = Math.cos(rad);
-                    const sin = Math.sin(rad);
-                    const localDelta = {
-                        x: (delta.x * cos - delta.y * sin) / img.scale,
-                        y: (delta.x * sin + delta.y * cos) / img.scale
-                    };
-    
-                    const newAnnotations = img.annotations.map(anno => {
-                        if (selectedAnnoIds.has(anno.id)) {
-                            switch (anno.type) {
-                                case 'arrow':
-                                case 'line':
-                                    return { ...anno, start: { x: anno.start.x + localDelta.x, y: anno.start.y + localDelta.y }, end: { x: anno.end.x + localDelta.x, y: anno.end.y + localDelta.y } };
-                                case 'rect':
-                                case 'text':
-                                case 'circle':
-                                    return { ...anno, x: anno.x + localDelta.x, y: anno.y + localDelta.y };
-                                case 'freehand':
-                                    return { ...anno, points: anno.points.map(p => ({ x: p.x + localDelta.x, y: p.y + localDelta.y })) };
-                                default:
-                                    return anno;
-                            }
-                        }
-                        return anno;
-                    });
-                    return { ...img, annotations: newAnnotations };
-                }
-                return img;
-            });
-        });
-    }, [selectedAnnotations]);
-
     const onBoxSelect = useCallback((ids: string[], annos: AnnotationSelection[], opts: { shiftKey: boolean, ctrlKey: boolean }) => {
          if (opts.ctrlKey) {
              // Subtract Selection
@@ -947,6 +1010,120 @@ const App: React.FC = () => {
          }
     }, []);
 
+    const fullFlatLayerList = useMemo(() => {
+        const list: { id: string; type: 'canvas-annotation' | 'image' | 'group' | 'image-annotation'; imageId?: string | null }[] = [];
+        
+        [...canvasAnnotations].reverse().forEach(anno => {
+            list.push({ id: anno.id, type: 'canvas-annotation', imageId: null });
+        });
+
+        const topLevelRenderOrder = [...visualLayerOrder].reverse();
+
+        function processGroup(group: Group) {
+            list.push({ id: group.id, type: 'group' });
+            if (group.isExpanded) {
+                const childGroups = group.groupIds.map(id => groups.find(g => g.id === id)).filter(Boolean) as Group[];
+                const childImages = group.imageIds.map(id => images.find(i => i.id === id)).filter(Boolean) as CanvasImage[];
+                
+                childGroups.forEach(processGroup);
+                childImages.forEach(processImage);
+            }
+        }
+
+        function processImage(image: CanvasImage) {
+            list.push({ id: image.id, type: 'image' });
+            if (expandedImageAnnotationIds.includes(image.id)) {
+                image.annotations.forEach(anno => {
+                    list.push({ id: anno.id, type: 'image-annotation', imageId: image.id });
+                });
+            }
+        }
+        
+        topLevelRenderOrder.forEach(item => {
+            if ('imageIds' in item) { // is Group
+                processGroup(item);
+            } else { // is Image
+                processImage(item as CanvasImage);
+            }
+        });
+
+        return list;
+    }, [canvasAnnotations, visualLayerOrder, groups, images, expandedImageAnnotationIds]);
+
+
+    const handleSelectLayerItem = useCallback((id: string, type: 'image' | 'group' | 'canvas-annotation' | 'image-annotation', opts: { shiftKey: boolean, ctrlKey: boolean }, imageIdForAnnotation?: string | null) => {
+        if (opts.shiftKey && selectedLayerId) {
+            const anchorIndex = fullFlatLayerList.findIndex(item => item.id === selectedLayerId);
+            const currentIndex = fullFlatLayerList.findIndex(item => item.id === id && (item.type !== 'image-annotation' || item.imageId === imageIdForAnnotation));
+
+            if (anchorIndex !== -1 && currentIndex !== -1) {
+                const start = Math.min(anchorIndex, currentIndex);
+                const end = Math.max(anchorIndex, currentIndex);
+                const range = fullFlatLayerList.slice(start, end + 1);
+
+                let newSelectedImageIds = opts.ctrlKey ? [...selectedImageIds] : [];
+                let newSelectedGroupIds = opts.ctrlKey ? [...selectedGroupIds] : [];
+                let newSelectedAnnotations = opts.ctrlKey ? [...selectedAnnotations] : [];
+
+                range.forEach(item => {
+                    if (item.type === 'image') newSelectedImageIds.push(item.id);
+                    else if (item.type === 'group') newSelectedGroupIds.push(item.id);
+                    else if (item.type === 'canvas-annotation') newSelectedAnnotations.push({ imageId: null, annotationId: item.id });
+                    else if (item.type === 'image-annotation') newSelectedAnnotations.push({ imageId: item.imageId || null, annotationId: item.id });
+                });
+
+                setSelectedImageIds(Array.from(new Set(newSelectedImageIds)));
+                setSelectedGroupIds(Array.from(new Set(newSelectedGroupIds)));
+                setSelectedAnnotations(Array.from(new Map(newSelectedAnnotations.map(item => [`${item.imageId}-${item.annotationId}`, item])).values()));
+                return;
+            }
+        }
+        
+        let newSelectedImageIds = selectedImageIds;
+        let newSelectedGroupIds = selectedGroupIds;
+        let newSelectedAnnotations = selectedAnnotations;
+
+        if (!opts.ctrlKey && !opts.shiftKey) { // Single click resets all
+            newSelectedImageIds = [];
+            newSelectedGroupIds = [];
+            newSelectedAnnotations = [];
+        }
+
+        const toggle = (arr: any[], val: any) => arr.includes(val) ? arr.filter(i => i !== val) : [...arr, val];
+        const toggleAnno = (arr: AnnotationSelection[], val: AnnotationSelection) => {
+            const idx = arr.findIndex(i => i.imageId === val.imageId && i.annotationId === val.annotationId);
+            if (idx > -1) {
+                return [...arr.slice(0, idx), ...arr.slice(idx + 1)];
+            }
+            return [...arr, val];
+        };
+
+        switch (type) {
+            case 'image':
+                newSelectedImageIds = opts.ctrlKey ? toggle(selectedImageIds, id) : [id];
+                break;
+            case 'group':
+                newSelectedGroupIds = opts.ctrlKey ? toggle(selectedGroupIds, id) : [id];
+                break;
+            case 'canvas-annotation':
+            case 'image-annotation':
+                const sel = { imageId: imageIdForAnnotation || null, annotationId: id };
+                newSelectedAnnotations = opts.ctrlKey ? toggleAnno(selectedAnnotations, sel) : [sel];
+                break;
+        }
+
+        if (!opts.ctrlKey && !opts.shiftKey) {
+            if (type !== 'image') newSelectedImageIds = [];
+            if (type !== 'group') newSelectedGroupIds = [];
+            if (type !== 'canvas-annotation' && type !== 'image-annotation') newSelectedAnnotations = [];
+        }
+        
+        setSelectedImageIds(newSelectedImageIds);
+        setSelectedGroupIds(newSelectedGroupIds);
+        setSelectedAnnotations(newSelectedAnnotations);
+        setSelectedLayerId(id);
+    }, [fullFlatLayerList, selectedLayerId, selectedImageIds, selectedGroupIds, selectedAnnotations]);
+    
     const onInteractionEnd = useCallback(() => {
         pushHistory({});
     }, [pushHistory]);
@@ -1250,7 +1427,6 @@ const App: React.FC = () => {
         setActiveTool('select');
     }, [selectedAnnotations, updateSelectedAnnotations]);
 
-
     return (
         <div className="flex h-screen w-screen bg-gray-900 text-white overflow-hidden">
             <LeftSidebar 
@@ -1283,9 +1459,10 @@ const App: React.FC = () => {
                     setGroups([]);
                     setCanvasAnnotations([]);
                     setSelectedImageIds([]);
+                    setSelectedGroupIds([]);
                     setSelectedAnnotations([]);
                     setCropArea(null);
-                    pushHistory({ images: [], groups: [], canvasAnnotations: [], selectedImageIds: [], selectedAnnotations: [] });
+                    pushHistory({ images: [], groups: [], canvasAnnotations: [], selectedImageIds: [], selectedGroupIds: [], selectedAnnotations: [] });
                 }}
                 onDownloadAllCanvas={() => renderAndDownload(images, canvasAnnotations, null, `canvas-export.${exportFormat}`)}
                 onUncrop={handleUncrop}
@@ -1311,22 +1488,13 @@ const App: React.FC = () => {
                 <div className="flex-1 relative overflow-hidden">
                      <CanvasWrapper
                         ref={canvasRef}
+                        appStateRef={appStateRef}
                         images={images}
                         groups={groups}
                         setImages={setImages}
                         onInteractionEnd={onInteractionEnd}
                         selectedImageIds={selectedImageIds}
-                        setSelectedImageId={(id, opts) => { 
-                             setSelectedLayerId(id);
-                             if (id === null) {
-                                 setSelectedImageIds([]);
-                             } else if (opts.shiftKey || opts.ctrlKey) {
-                                 setSelectedImageIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
-                             } else {
-                                 setSelectedImageIds([id]);
-                                 setSelectedAnnotations(() => []);
-                             }
-                        }}
+                        setSelectedImageId={(id, opts) => handleSelectLayerItem(id!, 'image', opts, null)}
                         onSelectImages={(ids, keep) => { 
                             if(keep) setSelectedImageIds(prev => Array.from(new Set([...prev, ...ids])));
                             else setSelectedImageIds(ids);
@@ -1350,10 +1518,8 @@ const App: React.FC = () => {
                         onColorPicked={handleColorPicked}
                         canvasAnnotations={canvasAnnotations}
                         addCanvasAnnotation={addCanvasAnnotation}
-                        onMoveSelectedAnnotations={handleMoveSelectedAnnotations}
                         onReparentCanvasAnnotationsToImage={onReparentCanvasAnnotationsToImage}
                         reparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
-                        onMoveSelectedImages={handleMoveSelectedImages}
                         lastCanvasMousePosition={lastCanvasMousePosition}
                         onReparentImageAnnotationsToCanvas={onReparentImageAnnotationsToCanvas}
                         selectedLayerId={selectedLayerId}
@@ -1378,46 +1544,13 @@ const App: React.FC = () => {
                 images={images}
                 visualLayerOrder={visualLayerOrder}
                 onRenameImage={renameCanvasImage}
-                onSelectLayer={(id, type, opts) => { 
-                    const isMulti = opts.shiftKey || opts.ctrlKey;
-                    if (type === 'image') {
-                         setSelectedLayerId(id);
-                         if (isMulti) {
-                             setSelectedImageIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
-                         } else {
-                             setSelectedImageIds([id]);
-                             setSelectedAnnotations(() => []);
-                         }
-                    } else { // 'group'
-                         setSelectedLayerId(id);
-                         if (!isMulti) {
-                             setSelectedImageIds([]);
-                             setSelectedAnnotations(() => []);
-                         }
-                    }
-                }}
+                onSelectLayer={handleSelectLayerItem}
                 onCenterOnLayer={() => { /* impl */ }}
                 onSelectImages={(ids, keep) => { /* impl */ }}
                 onDeleteImage={deleteImage}
                 onReorderTopLevelLayer={() => { /* impl */ }}
-                onReorderLayer={() => { /* impl */ }}
+                onReorderLayer={reorderLayers}
                 selectedAnnotations={selectedAnnotations}
-                onSelectAnnotation={(imgId, annoId, opts) => {
-                    const newSelection = { imageId: imgId, annotationId: annoId };
-                    if (opts.ctrlKey || opts.shiftKey) {
-                        setSelectedAnnotations(prev => {
-                            const isAlreadySelected = prev.some(s => s.annotationId === annoId && s.imageId === imgId);
-                            if (isAlreadySelected) {
-                                return prev.filter(s => !(s.annotationId === annoId && s.imageId === imgId));
-                            } else {
-                                return [...prev, newSelection];
-                            }
-                        });
-                    } else {
-                        setSelectedAnnotations([newSelection]);
-                        setSelectedImageIds([]);
-                    }
-                }}
                 groups={groups}
                 onDeleteGroup={deleteGroup}
                 onRenameGroup={onRenameGroup}
@@ -1429,6 +1562,7 @@ const App: React.FC = () => {
                 onReparentImageAnnotationsToCanvas={onReparentImageAnnotationsToCanvas}
                 onReparentImageAnnotationsToImage={reparentImageAnnotationsToImage}
                 selectedImageIds={selectedImageIds}
+                selectedGroupIds={selectedGroupIds}
                 selectedLayerId={selectedLayerId}
                 parentImageIds={new Set()}
                 expandedImageAnnotationIds={expandedImageAnnotationIds}
@@ -1439,6 +1573,9 @@ const App: React.FC = () => {
                 onReverseLayerOrder={() => { /* impl */ }}
                 onAddTag={() => { /* impl */ }}
                 onRemoveTag={() => { /* impl */ }}
+                onToggleVisibility={toggleLayerVisibility}
+                onToggleLock={toggleLayerLock}
+                onDuplicateLayer={duplicateLayer}
             />
         </div>
     );

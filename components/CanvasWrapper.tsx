@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle, useLayoutEffect } from 'react';
 import { CanvasImage, Rect, Point, AspectRatio, AnnotationTool, Annotation, FreehandAnnotation, RectAnnotation, CircleAnnotation, TextAnnotation, ArrowAnnotation, LineAnnotation, Group } from '../types';
 import { readImageFile } from '../utils/fileUtils';
-import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect, getCropHandles, CropHandle } from '../utils/canvasUtils';
+import { drawCanvas, getAnnotationBounds, getAnnotationPrimitiveBounds, getMultiAnnotationBounds, transformLocalToGlobal, rectIntersect, getCropHandles, CropHandle, getImagesBounds } from '../utils/canvasUtils';
 import { rgbToHex } from '../utils/colorUtils';
 
 type AnnotationSelection = { imageId: string | null; annotationId: string; };
@@ -33,25 +33,24 @@ interface CanvasWrapperProps {
   onColorPicked: (color: string) => void;
   canvasAnnotations: Annotation[];
   addCanvasAnnotation: (annotation: Annotation) => void;
-  onMoveSelectedAnnotations: (delta: Point) => void;
   onReparentCanvasAnnotationsToImage: (annotationIds: string[], imageId: string) => void;
   reparentImageAnnotationsToImage: (annotations: Array<{ annotationId: string; imageId: string }>, newImageId: string) => void;
-  onMoveSelectedImages: (delta: Point) => void;
   lastCanvasMousePosition: React.MutableRefObject<Point>;
   onReparentImageAnnotationsToCanvas: (selections: Array<{ annotationId: string; imageId: string }>) => void;
   selectedLayerId: string | null;
+  appStateRef: React.MutableRefObject<any>;
 }
 
 type InteractionMode = 'pan' | 'move' | 'crop' | 'resize-crop' | 'annotating' | 'move-crop' | 'move-annotation' | 'marquee-select' | 'scale-annotation' | 'rotate-annotation' | 'resize-arrow-start' | 'resize-arrow-end' | 'scale-multi-annotation' | 'rotate-multi-annotation';
 
 type InteractionState =
   | { mode: 'pan' }
-  | { mode: 'move'; startPoint: Point }
+  | { mode: 'move'; startPoint: Point; initialImages: Array<{id: string, x: number, y: number}> }
   | { mode: 'crop'; startPoint: Point }
   | { mode: 'resize-crop'; handle: CropHandle; startPoint: Point; initialCropArea: Rect }
   | { mode: 'annotating'; startPoint: Point; shiftKey: boolean }
   | { mode: 'move-crop'; startPoint: Point; initialCropArea: Rect }
-  | { mode: 'move-annotation'; startPoint: Point }
+  | { mode: 'move-annotation'; startPoint: Point; initialAnnotations: Array<{ selection: AnnotationSelection; annotation: Annotation }> }
   | { mode: 'marquee-select'; startPoint: Point; shiftKey: boolean; ctrlKey: boolean }
   | { mode: 'scale-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startScale: number; startDist: number; }
   | { mode: 'rotate-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startRotation: number; startAngle: number; }
@@ -93,16 +92,15 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
   onColorPicked,
   canvasAnnotations,
   addCanvasAnnotation,
-  onMoveSelectedAnnotations,
   onReparentCanvasAnnotationsToImage,
   reparentImageAnnotationsToImage,
-  onMoveSelectedImages,
   deleteSelectedAnnotations,
   lastCanvasMousePosition,
   onReparentImageAnnotationsToCanvas,
   updateMultipleAnnotationsForInteraction,
   selectedAnnotationObjects,
   selectedLayerId,
+  appStateRef,
 }, ref) => {
   const internalCanvasRef = useRef<HTMLCanvasElement>(null);
   useImperativeHandle(ref, () => internalCanvasRef.current!);
@@ -588,42 +586,81 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     if (activeTool === 'select') {
       const clickedAnnotation = findAnnotationAtPoint(canvasPoint);
       if (clickedAnnotation) {
-          const isMultiSelect = e.shiftKey || e.ctrlKey || e.metaKey;
-          
-          if (!isMultiSelect) {
-              setSelectedImageId(null, { shiftKey: false, ctrlKey: false });
-          }
+        const isMultiSelect = e.shiftKey || e.ctrlKey || e.metaKey;
+        const currentSelections = appStateRef.current.selectedAnnotations;
+        const selection = { imageId: clickedAnnotation.imageId, annotationId: clickedAnnotation.annotationId };
+        const isAlreadySelected = currentSelections.some(s => s.annotationId === selection.annotationId && s.imageId === selection.imageId);
 
-          setSelectedAnnotations(prev => {
-              const selection = { imageId: clickedAnnotation.imageId, annotationId: clickedAnnotation.annotationId };
-              const isAlreadySelected = prev.some(s => s.annotationId === selection.annotationId);
-              
-              if (isMultiSelect) {
-                  return isAlreadySelected 
-                      ? prev.filter(s => s.annotationId !== selection.annotationId) 
-                      : [...prev, selection];
-              } else {
-                  if (isAlreadySelected) {
-                      return prev;
-                  }
-                  return [selection];
-              }
-          });
-          setInteraction({ mode: 'move-annotation', startPoint: canvasPoint });
-          return;
+        let nextSelectedAnnotations: AnnotationSelection[];
+        
+        if (isAlreadySelected) {
+            if (e.ctrlKey || e.metaKey) { // Ctrl/Cmd-click on selected item deselects it
+                nextSelectedAnnotations = currentSelections.filter(s => !(s.annotationId === selection.annotationId && s.imageId === selection.imageId));
+            } else { // Plain click or shift-click on already selected item -> start move
+                nextSelectedAnnotations = currentSelections;
+            }
+        } else { // Not already selected
+            if (e.shiftKey || e.ctrlKey || e.metaKey) { // Shift/Ctrl/Cmd-click adds to selection
+                nextSelectedAnnotations = [...currentSelections, selection];
+            } else { // Plain click replaces selection
+                nextSelectedAnnotations = [selection];
+            }
+        }
+
+        setSelectedAnnotations(() => nextSelectedAnnotations);
+        if (!isAlreadySelected && !isMultiSelect) {
+            setSelectedImageId(null, { shiftKey: false, ctrlKey: false });
+        }
+
+        const initialAnnotationsData = nextSelectedAnnotations.map(sel => {
+            const image = sel.imageId ? images.find(i => i.id === sel.imageId) : null;
+            const annotation = image 
+                ? image.annotations.find(a => a.id === sel.annotationId)
+                : canvasAnnotations.find(a => a.id === sel.annotationId);
+            return { selection: sel, annotation: JSON.parse(JSON.stringify(annotation)) as Annotation };
+        }).filter(item => item.annotation);
+
+        setInteraction({ 
+            mode: 'move-annotation', 
+            startPoint: canvasPoint,
+            initialAnnotations: initialAnnotationsData,
+        });
+        return;
       }
   
       const clickedImage = [...images].reverse().find(img => getLocalPoint(canvasPoint, img) !== null);
   
       if (clickedImage) {
-        const isMultiSelectModifier = e.shiftKey || e.metaKey || e.ctrlKey;
-        const isAlreadySelected = selectedImageIds.includes(clickedImage.id);
-  
-        if (isAlreadySelected && !isMultiSelectModifier) {
+        const currentSelectedImageIds = appStateRef.current.selectedImageIds;
+        const isAlreadySelected = currentSelectedImageIds.includes(clickedImage.id);
+
+        let nextSelectedImageIds: string[];
+
+        if(isAlreadySelected) {
+            if (e.ctrlKey || e.metaKey) {
+                nextSelectedImageIds = currentSelectedImageIds.filter(id => id !== clickedImage.id);
+            } else {
+                nextSelectedImageIds = currentSelectedImageIds;
+            }
         } else {
-          setSelectedImageId(clickedImage.id, { shiftKey: e.shiftKey, ctrlKey: e.metaKey || e.ctrlKey });
+            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                nextSelectedImageIds = [...currentSelectedImageIds, clickedImage.id];
+            } else {
+                nextSelectedImageIds = [clickedImage.id];
+            }
         }
-        setInteraction({ mode: 'move', startPoint: canvasPoint });
+
+        onSelectImages(nextSelectedImageIds, false);
+        
+        const initialImagesData = images
+            .filter(img => nextSelectedImageIds.includes(img.id))
+            .map(img => ({ id: img.id, x: img.x, y: img.y }));
+
+        setInteraction({ 
+            mode: 'move', 
+            startPoint: canvasPoint,
+            initialImages: initialImagesData
+        });
       } else {
         const isMultiSelect = e.shiftKey;
         const isSubtractSelect = e.ctrlKey || e.metaKey;
@@ -631,7 +668,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         setMarqueeRect({ x: canvasPoint.x, y: canvasPoint.y, width: 0, height: 0 });
       }
     }
-  }, [getCanvasPoint, images, setSelectedImageId, cropArea, viewTransform.scale, activeTool, toolOptions, getLocalPoint, getUnboundedLocalPoint, addAnnotation, isCropKeyPressed, setCropArea, findAnnotationAtPoint, setSelectedAnnotations, isSpacebarPressed, onSelectImages, selectedImageIds, setActiveTool, onColorPicked, addCanvasAnnotation, selectedAnnotations, getAnnotationLocalPoint, canvasAnnotations, selectedAnnotationObjects]);
+  }, [getCanvasPoint, images, setSelectedImageId, cropArea, viewTransform.scale, activeTool, toolOptions, getLocalPoint, getUnboundedLocalPoint, addAnnotation, isCropKeyPressed, setCropArea, findAnnotationAtPoint, setSelectedAnnotations, isSpacebarPressed, onSelectImages, selectedImageIds, setActiveTool, onColorPicked, addCanvasAnnotation, selectedAnnotations, getAnnotationLocalPoint, canvasAnnotations, selectedAnnotationObjects, appStateRef]);
 
   const handleCanvasMouseMove = useCallback((e: MouseEvent) => {
       if (!interaction) return;
@@ -643,18 +680,75 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
           y: currentPoint.y - lastMousePosition.current.y
       };
 
-      const deltaX = screenSpaceDelta.x / viewTransform.scale;
-      const deltaY = screenSpaceDelta.y / viewTransform.scale;
-      
       lastMousePosition.current = currentPoint;
       lastCanvasMousePosition.current = canvasPoint;
 
       if (interaction.mode === 'pan') {
           setViewTransform(prev => ({ ...prev, offset: { x: prev.offset.x + screenSpaceDelta.x, y: prev.offset.y + screenSpaceDelta.y } }));
       } else if (interaction.mode === 'move') {
-           onMoveSelectedImages({ x: deltaX, y: deltaY });
+            const delta = {
+                x: canvasPoint.x - interaction.startPoint.x,
+                y: canvasPoint.y - interaction.startPoint.y
+            };
+            
+            setImages(prevImages => prevImages.map(img => {
+                const initial = interaction.initialImages.find(i => i.id === img.id);
+                if (initial && !img.locked) {
+                    return { ...img, x: initial.x + delta.x, y: initial.y + delta.y };
+                }
+                return img;
+            }));
       } else if (interaction.mode === 'move-annotation') {
-            onMoveSelectedAnnotations({ x: deltaX, y: deltaY });
+            const delta = {
+                x: canvasPoint.x - interaction.startPoint.x,
+                y: canvasPoint.y - interaction.startPoint.y
+            };
+
+            const updates: Array<{ selection: AnnotationSelection; changes: Partial<Annotation> }> = [];
+
+            interaction.initialAnnotations.forEach(({ selection, annotation: initialAnnotation }) => {
+                const image = selection.imageId ? images.find(i => i.id === selection.imageId) : null;
+                if (image?.locked) return;
+
+                let moveDelta = delta;
+
+                if (image) {
+                    const rad = -image.rotation * Math.PI / 180;
+                    const cos = Math.cos(rad);
+                    const sin = Math.sin(rad);
+                    moveDelta = {
+                        x: (delta.x * cos - delta.y * sin) / image.scale,
+                        y: (delta.x * sin + delta.y * cos) / image.scale
+                    };
+                }
+
+                let changes: Partial<Annotation> = {};
+                switch (initialAnnotation.type) {
+                    case 'arrow':
+                    case 'line':
+                        changes = {
+                            start: { x: (initialAnnotation as ArrowAnnotation).start.x + moveDelta.x, y: (initialAnnotation as ArrowAnnotation).start.y + moveDelta.y },
+                            end: { x: (initialAnnotation as ArrowAnnotation).end.x + moveDelta.x, y: (initialAnnotation as ArrowAnnotation).end.y + moveDelta.y }
+                        };
+                        break;
+                    case 'rect':
+                    case 'text':
+                    case 'circle':
+                        changes = {
+                            x: (initialAnnotation as RectAnnotation).x + moveDelta.x,
+                            y: (initialAnnotation as RectAnnotation).y + moveDelta.y
+                        };
+                        break;
+                    case 'freehand':
+                        changes = {
+                            points: (initialAnnotation as FreehandAnnotation).points.map(p => ({ x: p.x + moveDelta.x, y: p.y + moveDelta.y }))
+                        };
+                        break;
+                }
+                updates.push({ selection, changes });
+            });
+
+            updateMultipleAnnotationsForInteraction(updates);
 
             const topmostImage = [...images].reverse().find(img => getLocalPoint(canvasPoint, img) !== null);
             const sourceImageIds = new Set(selectedAnnotations.map(s => s.imageId));
@@ -812,7 +906,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         if (dropTargetImageId) setDropTargetImageId(null);
       }
 
-  }, [interaction, getCanvasPoint, viewTransform.scale, onMoveSelectedImages, onMoveSelectedAnnotations, drawingAnnotation.annotation, aspectRatio, getUnboundedLocalPoint, images, updateAnnotation, updateMultipleAnnotationsForInteraction, lastMousePosition, dropTargetImageId, selectedAnnotations, getLocalPoint, drawingAnnotation.imageId]);
+  }, [interaction, getCanvasPoint, viewTransform.scale, drawingAnnotation.annotation, aspectRatio, getUnboundedLocalPoint, images, updateAnnotation, updateMultipleAnnotationsForInteraction, lastMousePosition, dropTargetImageId, selectedAnnotations, getLocalPoint, drawingAnnotation.imageId, setImages]);
 
   const handleCanvasMouseUp = useCallback(() => {
     if (!interaction) {
@@ -839,12 +933,6 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
                 reparentImageAnnotationsToImage(fromOtherImages, targetId);
                 historyPushed = true;
             }
-        } else if (!imageUnderCursor) {
-            const fromImages = selectedAnnotations.filter(s => s.imageId !== null) as { annotationId: string, imageId: string }[];
-            if (fromImages.length > 0) {
-                onReparentImageAnnotationsToCanvas(fromImages);
-                historyPushed = true;
-            }
         }
     } else if (interaction.mode === 'annotating' && drawingAnnotation.annotation) {
         const finalAnnotation = { ...drawingAnnotation.annotation };
@@ -868,13 +956,51 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         const rw = Math.abs(width);
         const rh = Math.abs(height);
         const selectionRect = { x: rx, y: ry, width: rw, height: rh };
-        const selectedImages = images.filter(img => rectIntersect(selectionRect, { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale })).map(img => img.id);
+        
+        const selectedImages = images.filter(img => {
+            const bounds = getImagesBounds([img]);
+            return bounds ? rectIntersect(selectionRect, bounds) : false;
+        }).map(img => img.id);
+
         const selectedAnnos: AnnotationSelection[] = [];
+        
+        // Check Canvas Annotations
         canvasAnnotations.forEach(anno => {
-            if (rectIntersect(selectionRect, getAnnotationPrimitiveBounds(anno, contextRef.current!))) {
+            if (rectIntersect(selectionRect, getAnnotationBounds(anno, contextRef.current!))) {
                 selectedAnnos.push({ imageId: null, annotationId: anno.id });
             }
         });
+
+        // Check Image Annotations
+        images.forEach(img => {
+            if (img.visible === false || img.locked) return;
+            img.annotations.forEach(anno => {
+                const localBounds = getAnnotationBounds(anno, contextRef.current!);
+                
+                const corners = [
+                    { x: localBounds.x, y: localBounds.y },
+                    { x: localBounds.x + localBounds.width, y: localBounds.y },
+                    { x: localBounds.x + localBounds.width, y: localBounds.y + localBounds.height },
+                    { x: localBounds.x, y: localBounds.y + localBounds.height }
+                ];
+                
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                corners.forEach(c => {
+                    const globalPoint = transformLocalToGlobal(c, img);
+                    minX = Math.min(minX, globalPoint.x);
+                    minY = Math.min(minY, globalPoint.y);
+                    maxX = Math.max(maxX, globalPoint.x);
+                    maxY = Math.max(maxY, globalPoint.y);
+                });
+                
+                const globalAnnotationBounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+
+                if (rectIntersect(selectionRect, globalAnnotationBounds)) {
+                    selectedAnnos.push({ imageId: img.id, annotationId: anno.id });
+                }
+            });
+        });
+
         onBoxSelect(selectedImages, selectedAnnos, { shiftKey: interaction.shiftKey, ctrlKey: interaction.ctrlKey });
     }
 
