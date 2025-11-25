@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { CanvasImage, AspectRatio, AnnotationTool, Rect, Annotation, TextAnnotation, Group } from '../types';
 import { UploadIcon, ZoomInIcon, ZoomOutIcon, RotateCwIcon, CropIcon, PenToolIcon, TypeIcon, SquareIcon, CircleIcon, MousePointerIcon, TrashIcon, UndoIcon, RedoIcon, ArrowIcon, XIcon, SendToBackIcon, ChevronDownIcon, ChevronUpIcon, BringToFrontIcon, AlignLeftIcon, AlignHorizontalCenterIcon, AlignRightIcon, AlignTopIcon, AlignVerticalCenterIcon, AlignBottomIcon, CopyIcon, DownloadIcon, LineIcon, ArrangeHorizontalIcon, ArrangeVerticalIcon, EyedropperIcon, MaximizeIcon, SaveIcon, FolderOpenIcon, LayersIcon, DistributeHorizontalIcon, DistributeVerticalIcon, MatchWidthIcon, MatchHeightIcon, StackHorizontalIcon, StackVerticalIcon, SlidersIcon } from './icons';
@@ -185,7 +184,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
 
 
   // Determine which color targets are available based on context
-  const availableColorTargets = useMemo(() => {
+  const availableColorTargets = useMemo((): ColorTarget[] => {
       const targets = new Set<ColorTarget>();
 
       // Annotation Editing
@@ -210,7 +209,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
 
       const order: ColorTarget[] = ['stroke', 'fill', 'bg', 'outline'];
       const result = order.filter(t => targets.has(t));
-      return result.length > 0 ? result : ['stroke'];
+      return result.length > 0 ? result : (['stroke'] as ColorTarget[]);
   }, [isEditingAnnotation, isEditingImage, activeTool, selectedAnnotationObjects]);
 
   // Create a fingerprint of the selection to detect when the *item* changes, not just its properties.

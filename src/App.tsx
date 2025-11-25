@@ -2,8 +2,7 @@ import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { CanvasImage, Group, Annotation, Rect, Point, AspectRatio, AnnotationTool, AnnotationSelection, TextAnnotation, RectAnnotation, CircleAnnotation } from './types';
 import { CanvasWrapper } from './components/CanvasWrapper';
 import { LeftSidebar } from './components/LeftSidebar';
-// FIX: Changed to a default import to match the updated export in LayersPanel.tsx.
-import LayersPanel from './components/LayersPanel';
+import { LayersPanel } from './components/LayersPanel';
 import { MiniMap } from './components/MiniMap';
 import { FloatingAnnotationEditor } from './components/FloatingAnnotationEditor';
 import { readImageFile, downloadDataUrl } from './utils/fileUtils';
@@ -55,7 +54,14 @@ const App: React.FC = () => {
 
     const lastCanvasMousePosition = useRef<Point>({ x: 0, y: 0 });
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const appStateRef = useRef<AppState>();
+    const appStateRef = useRef<AppState>({
+        images: [],
+        groups: [],
+        canvasAnnotations: [],
+        selectedImageIds: [],
+        selectedAnnotations: [],
+        selectedLayerId: null
+    });
     appStateRef.current = { images, groups, canvasAnnotations, selectedImageIds, selectedAnnotations, selectedLayerId };
 
     // Helpers
@@ -909,14 +915,20 @@ const App: React.FC = () => {
         });
     }, [selectedAnnotations]);
 
-    const onBoxSelect = useCallback((ids: string[], annos: AnnotationSelection[], keep: boolean) => {
-         if (keep) {
+    const onBoxSelect = useCallback((ids: string[], annos: AnnotationSelection[], opts: { shiftKey: boolean, ctrlKey: boolean }) => {
+         if (opts.ctrlKey) {
+             // Subtract Selection
+             setSelectedImageIds(prev => prev.filter(id => !ids.includes(id)));
+             setSelectedAnnotations(prev => prev.filter(a => !annos.some(na => na.annotationId === a.annotationId && na.imageId === a.imageId)));
+         } else if (opts.shiftKey) {
+             // Union Selection
              setSelectedImageIds(prev => Array.from(new Set([...prev, ...ids])));
              setSelectedAnnotations(prev => {
                  const currentIds = new Set(prev.map(a => a.annotationId));
                  return [...prev, ...annos.filter(a => !currentIds.has(a.annotationId))];
              });
          } else {
+             // Replace Selection
              setSelectedImageIds(ids);
              setSelectedAnnotations(annos);
          }

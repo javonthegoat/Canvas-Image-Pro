@@ -14,7 +14,7 @@ interface CanvasWrapperProps {
   selectedImageIds: string[];
   setSelectedImageId: (id: string | null, options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onSelectImages: (ids: string[], keepExisting: boolean) => void;
-  onBoxSelect: (imageIds: string[], annotationSelections: AnnotationSelection[], keepExisting: boolean) => void;
+  onBoxSelect: (imageIds: string[], annotationSelections: AnnotationSelection[], options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   cropArea: Rect | null;
   setCropArea: React.Dispatch<React.SetStateAction<Rect | null>>;
   aspectRatio: AspectRatio;
@@ -52,7 +52,7 @@ type InteractionState =
   | { mode: 'annotating'; startPoint: Point; shiftKey: boolean }
   | { mode: 'move-crop'; startPoint: Point; initialCropArea: Rect }
   | { mode: 'move-annotation'; startPoint: Point }
-  | { mode: 'marquee-select'; startPoint: Point; shiftKey: boolean }
+  | { mode: 'marquee-select'; startPoint: Point; shiftKey: boolean; ctrlKey: boolean }
   | { mode: 'scale-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startScale: number; startDist: number; }
   | { mode: 'rotate-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startRotation: number; startAngle: number; }
   | { mode: 'resize-arrow-start'; startPoint: Point; annotationId: string; imageId: string | null; }
@@ -268,16 +268,21 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
          const cos = Math.cos(rad);
          const sin = Math.sin(rad);
          p = { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos };
-         if (annotation.scale !== 0) {
-             p = { x: p.x / annotation.scale, y: p.y / annotation.scale };
-         }
+         
+         const effectiveScale = annotation.scale || 0.0001;
+         p = { x: p.x / effectiveScale, y: p.y / effectiveScale };
+         
          const localPointInAnnotation = { x: p.x + center.x, y: p.y + center.y };
+
+         // Define hit tolerance in screen pixels
+         const HIT_TOLERANCE_PX = 12;
+         const localTolerance = HIT_TOLERANCE_PX / (imageScale * viewTransform.scale * Math.abs(effectiveScale));
 
          if (annotation.type === 'line' || annotation.type === 'arrow' || annotation.type === 'freehand') {
             const points = annotation.type === 'freehand' ? annotation.points : [annotation.start, annotation.end];
             if (points.length < 2) return false;
 
-            const clickThreshold = (annotation.strokeWidth / 2) + (5 / (imageScale * viewTransform.scale * annotation.scale));
+            const clickThreshold = (annotation.strokeWidth / 2) + localTolerance;
 
             for (let i = 0; i < points.length - 1; i++) {
                 const start = points[i];
@@ -302,6 +307,12 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
             if (normalizedBounds.width < 0) { normalizedBounds.x += normalizedBounds.width; normalizedBounds.width *= -1; }
             if (normalizedBounds.height < 0) { normalizedBounds.y += normalizedBounds.height; normalizedBounds.height *= -1; }
             
+            // Expand bounds by tolerance for easier selection
+            normalizedBounds.x -= localTolerance;
+            normalizedBounds.y -= localTolerance;
+            normalizedBounds.width += localTolerance * 2;
+            normalizedBounds.height += localTolerance * 2;
+
             return isPointInRect(localPointInAnnotation, normalizedBounds);
          }
     };
@@ -577,7 +588,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     if (activeTool === 'select') {
       const clickedAnnotation = findAnnotationAtPoint(canvasPoint);
       if (clickedAnnotation) {
-          const isMultiSelect = e.shiftKey;
+          const isMultiSelect = e.shiftKey || e.ctrlKey || e.metaKey;
           
           if (!isMultiSelect) {
               setSelectedImageId(null, { shiftKey: false, ctrlKey: false });
@@ -614,7 +625,9 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         }
         setInteraction({ mode: 'move', startPoint: canvasPoint });
       } else {
-        setInteraction({ mode: 'marquee-select', startPoint: canvasPoint, shiftKey: e.shiftKey });
+        const isMultiSelect = e.shiftKey;
+        const isSubtractSelect = e.ctrlKey || e.metaKey;
+        setInteraction({ mode: 'marquee-select', startPoint: canvasPoint, shiftKey: isMultiSelect, ctrlKey: isSubtractSelect });
         setMarqueeRect({ x: canvasPoint.x, y: canvasPoint.y, width: 0, height: 0 });
       }
     }
@@ -855,29 +868,14 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         const rw = Math.abs(width);
         const rh = Math.abs(height);
         const selectionRect = { x: rx, y: ry, width: rw, height: rh };
-        
         const selectedImages = images.filter(img => rectIntersect(selectionRect, { x: img.x, y: img.y, width: img.width * img.scale, height: img.height * img.scale })).map(img => img.id);
         const selectedAnnos: AnnotationSelection[] = [];
-        
-        // Check Canvas Annotations
         canvasAnnotations.forEach(anno => {
             if (rectIntersect(selectionRect, getAnnotationPrimitiveBounds(anno, contextRef.current!))) {
                 selectedAnnos.push({ imageId: null, annotationId: anno.id });
             }
         });
-
-        // Check Image Annotations
-        images.forEach(img => {
-            img.annotations.forEach(anno => {
-                const annoSelection = { imageId: img.id, annotationId: anno.id };
-                const bounds = getMultiAnnotationBounds([annoSelection], images, [], contextRef.current!);
-                if (bounds && rectIntersect(selectionRect, bounds)) {
-                    selectedAnnos.push(annoSelection);
-                }
-            });
-        });
-
-        onBoxSelect(selectedImages, selectedAnnos, interaction.shiftKey);
+        onBoxSelect(selectedImages, selectedAnnos, { shiftKey: interaction.shiftKey, ctrlKey: interaction.ctrlKey });
     }
 
     if (!historyPushed) {

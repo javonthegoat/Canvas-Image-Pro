@@ -54,7 +54,14 @@ const App: React.FC = () => {
 
     const lastCanvasMousePosition = useRef<Point>({ x: 0, y: 0 });
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const appStateRef = useRef<AppState>();
+    const appStateRef = useRef<AppState>({
+        images: [],
+        groups: [],
+        canvasAnnotations: [],
+        selectedImageIds: [],
+        selectedAnnotations: [],
+        selectedLayerId: null
+    });
     appStateRef.current = { images, groups, canvasAnnotations, selectedImageIds, selectedAnnotations, selectedLayerId };
 
     // Helpers
@@ -908,14 +915,20 @@ const App: React.FC = () => {
         });
     }, [selectedAnnotations]);
 
-    const onBoxSelect = useCallback((ids: string[], annos: AnnotationSelection[], keep: boolean) => {
-         if (keep) {
+    const onBoxSelect = useCallback((ids: string[], annos: AnnotationSelection[], opts: { shiftKey: boolean, ctrlKey: boolean }) => {
+         if (opts.ctrlKey) {
+             // Subtract Selection
+             setSelectedImageIds(prev => prev.filter(id => !ids.includes(id)));
+             setSelectedAnnotations(prev => prev.filter(a => !annos.some(na => na.annotationId === a.annotationId && na.imageId === a.imageId)));
+         } else if (opts.shiftKey) {
+             // Union Selection
              setSelectedImageIds(prev => Array.from(new Set([...prev, ...ids])));
              setSelectedAnnotations(prev => {
                  const currentIds = new Set(prev.map(a => a.annotationId));
                  return [...prev, ...annos.filter(a => !currentIds.has(a.annotationId))];
              });
          } else {
+             // Replace Selection
              setSelectedImageIds(ids);
              setSelectedAnnotations(annos);
          }
@@ -1252,7 +1265,15 @@ const App: React.FC = () => {
                 setExportFormat={setExportFormat}
                 onFitCropToImage={() => { /* impl */ }}
                 isLocked={isLocked}
-                onClearAllCanvas={() => renderAndDownload(images, canvasAnnotations, null, `canvas-export.${exportFormat}`)}
+                onClearAllCanvas={() => {
+                    setImages([]);
+                    setGroups([]);
+                    setCanvasAnnotations([]);
+                    setSelectedImageIds([]);
+                    setSelectedAnnotations([]);
+                    setCropArea(null);
+                    pushHistory({ images: [], groups: [], canvasAnnotations: [], selectedImageIds: [], selectedAnnotations: [] });
+                }}
                 onDownloadAllCanvas={() => renderAndDownload(images, canvasAnnotations, null, `canvas-export.${exportFormat}`)}
                 onUncrop={handleUncrop}
                 onSaveProject={() => { /* impl */ }}
@@ -1261,7 +1282,11 @@ const App: React.FC = () => {
                 images={images}
                 onDownloadSelectedImages={() => {
                      const selectedImages = images.filter(i => selectedImageIds.includes(i.id));
-                     renderAndDownload(selectedImages, [], null, `selection-export.${exportFormat}`);
+                     const selectedCanvasAnnos = canvasAnnotations.filter(a => selectedAnnotations.some(s => s.annotationId === a.id && s.imageId === null));
+                     
+                     if (selectedImages.length === 0 && selectedCanvasAnnos.length === 0) return;
+
+                     renderAndDownload(selectedImages, selectedCanvasAnnos, null, `selection-export.${exportFormat}`);
                 }}
                 isDirty={historyIndex >= 0}
                 selectedAnnotationObjects={selectedAnnotationObjects}

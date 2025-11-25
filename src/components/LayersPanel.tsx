@@ -1,5 +1,3 @@
-
-
 import React, { useState } from 'react';
 import { CanvasImage, Annotation, Group } from '../types';
 import { PenToolIcon, TypeIcon, SquareIcon, CircleIcon, TrashIcon, ArrowIcon, ChevronDownIcon, ChevronUpIcon, LayersIcon, LineIcon } from './icons';
@@ -27,6 +25,19 @@ interface LayersPanelProps {
     expandedImageAnnotationIds: string[];
     onToggleImageAnnotationsExpanded: (imageId: string) => void;
     appStateRef: React.MutableRefObject<any>; // To get fresh state
+    onCenterOnLayer: () => void;
+    onSelectImages: (ids: string[], keep: boolean) => void;
+    onReorderTopLevelLayer: () => void;
+    onReorderLayer: () => void;
+    onAddImageToGroup: () => void;
+    onUngroupImages: () => void;
+    onReparentGroup: () => void;
+    onRenameGroupLabel: () => void;
+    onToggleGroupLabel: () => void;
+    onReverseLayerOrder: () => void;
+    onAddTag: () => void;
+    onRemoveTag: () => void;
+    parentImageIds: Set<string>;
 }
 
 const getAnnotationIcon = (type: Annotation['type']) => {
@@ -245,7 +256,7 @@ const GroupItem: React.FC<Omit<LayersPanelProps, 'visualLayerOrder'> & { group: 
     );
 };
 
-const LayersPanel: React.FC<LayersPanelProps> = (props) => {
+export const LayersPanel: React.FC<LayersPanelProps> = (props) => {
     const { canvasAnnotations, visualLayerOrder, selectedAnnotations, onSelectAnnotation, onReparentImageAnnotationsToCanvas } = props;
 
     const handleCanvasDrop = (e: React.DragEvent) => {
@@ -302,5 +313,5 @@ const LayersPanel: React.FC<LayersPanelProps> = (props) => {
         </aside>
     );
 };
-// FIX: Changed from named to default export to resolve import error in App.tsx.
+
 export default LayersPanel;

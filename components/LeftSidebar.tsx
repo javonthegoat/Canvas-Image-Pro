@@ -129,8 +129,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
 
   const isEditingAnnotation = selectedAnnotationObjects.length > 0;
   const isEditingImage = selectedImageIds.length > 0;
-  // Define what constitutes a drawing tool (excluding select, eyedropper, crop)
-  const isDrawing = !['select', 'eyedropper', 'crop'].includes(activeTool);
   
   const isText = activeTool === 'text' || (isEditingAnnotation && selectedAnnotationObjects.some(a => a.type === 'text'));
 
@@ -189,7 +187,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const availableColorTargets = useMemo(() => {
       const targets = new Set<ColorTarget>();
 
-      // Annotation Editing (Highest Priority)
+      // Annotation Editing
       if (isEditingAnnotation) {
           const types = selectedAnnotationObjects.map(a => a.type);
           targets.add('stroke');
@@ -197,26 +195,22 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
           if (types.some(t => t === 'text')) { targets.add('bg'); targets.add('outline'); }
           if (types.some(t => ['freehand', 'arrow', 'line'].includes(t))) targets.add('outline');
       } 
-      // Active Tool (Drawing Priority)
-      else if (isDrawing) {
+      // Image Editing
+      else if (isEditingImage) {
+          targets.add('outline');
+      }
+      // Active Tool
+      else {
           targets.add('stroke');
           if (['rect', 'circle'].includes(activeTool)) targets.add('fill');
           if (activeTool === 'text') { targets.add('bg'); targets.add('outline'); }
           if (['freehand', 'arrow', 'line'].includes(activeTool)) targets.add('outline');
       }
-      // Image Editing (Lowest Priority)
-      else if (isEditingImage) {
-          targets.add('outline');
-      }
-      // Fallback (e.g. Select tool with nothing selected)
-      else {
-          targets.add('stroke'); // Default to stroke although nothing is selected
-      }
 
       const order: ColorTarget[] = ['stroke', 'fill', 'bg', 'outline'];
       const result = order.filter(t => targets.has(t));
-      return result.length > 0 ? result : ['stroke'];
-  }, [isEditingAnnotation, isEditingImage, activeTool, selectedAnnotationObjects, isDrawing]);
+      return result.length > 0 ? result : (['stroke'] as ColorTarget[]);
+  }, [isEditingAnnotation, isEditingImage, activeTool, selectedAnnotationObjects]);
 
   // Create a fingerprint of the selection to detect when the *item* changes, not just its properties.
   const annotationIdsFingerprint = selectedAnnotationObjects.map(a => a.id).sort().join(',');
@@ -224,12 +218,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
 
   const selectionFingerprint = useMemo(() => {
       if (annotationIdsFingerprint) return `anno:${annotationIdsFingerprint}`;
-      // Prioritize tool change over image selection if we are drawing.
-      // This ensures that selecting a drawing tool resets the panel to tool defaults even if an image is selected.
-      if (isDrawing) return `tool:${activeTool}`;
       if (imageIdsFingerprint) return `img:${imageIdsFingerprint}`;
       return `tool:${activeTool}`;
-  }, [annotationIdsFingerprint, imageIdsFingerprint, activeTool, isDrawing]);
+  }, [annotationIdsFingerprint, imageIdsFingerprint, activeTool]);
 
   // Reset activeColorTarget to default (first available) when selection context changes
   useEffect(() => {
@@ -338,7 +329,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const showUncrop = selectedImageIds.length > 0 && images.some(img => selectedImageIds.includes(img.id) && img.uncroppedFromId);
 
   const getActiveColorValue = (): string => {
-      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation && !isDrawing) {
+      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation) {
           return commonImageProps?.outlineColor === 'multi' ? '#ffffff' : (commonImageProps?.outlineColor || '#000000');
       }
 
@@ -373,7 +364,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
   const handleColorChange = (newColor: string) => {
       const changes: any = {};
 
-      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation && !isDrawing) {
+      if (activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation) {
           onUpdateSelectedImages({ outlineColor: newColor });
           return;
       }
@@ -485,11 +476,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                 )}
 
                 {/* Universal Properties Section */}
-                {(isEditingAnnotation || isDrawing || isEditingImage) && (
+                {(isEditingAnnotation || isEditingImage || (activeTool !== 'select' && activeTool !== 'eyedropper' && activeTool !== 'crop')) && (
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-bold text-gray-100 uppercase tracking-wide">
-                                {isEditingAnnotation ? `Edit ${selectedAnnotationObjects.length > 1 ? 'Selection' : selectedAnnotationObjects[0].type}` : (isDrawing ? 'Tool Properties' : 'Edit Image Properties')}
+                                {isEditingAnnotation ? `Edit ${selectedAnnotationObjects.length > 1 ? 'Selection' : selectedAnnotationObjects[0].type}` : isEditingImage ? 'Edit Image Properties' : 'Tool Properties'}
                             </h3>
                             {isEditingAnnotation && (
                                 <button onClick={deleteSelectedAnnotations} className="text-xs text-red-400 hover:text-red-300 flex items-center">
@@ -510,7 +501,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                         {/* Contextual Sliders & Inputs */}
                         <div className="space-y-4 border-t border-gray-800 pt-4">
                             {/* Width Slider (Stroke or Outline) */}
-                            {((!isText && activeColorTarget === 'stroke') || activeColorTarget === 'outline') && (isEditingAnnotation || isDrawing || !isEditingImage) && (
+                            {((!isText && activeColorTarget === 'stroke') || activeColorTarget === 'outline') && (isEditingAnnotation || !isEditingImage) && (
                                 <Slider
                                     label={isText ? 'Stroke Width' : (activeColorTarget === 'outline' ? 'Outline Width' : 'Stroke Width')}
                                     min={0}
@@ -536,7 +527,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                             )}
 
                             {/* Image Outline Width */}
-                            {activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation && !isDrawing && (
+                            {activeColorTarget === 'outline' && isEditingImage && !isEditingAnnotation && (
                                 <Slider
                                     label="Outline Width"
                                     min={0}
@@ -556,7 +547,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                     step={0.05}
                                     displayPrecision={2}
                                     value={(() => {
-                                        if (isEditingImage && !isEditingAnnotation && !isDrawing && activeColorTarget === 'outline') {
+                                        if (isEditingImage && !isEditingAnnotation && activeColorTarget === 'outline') {
                                             const val = commonImageProps?.outlineOpacity;
                                             return val === 'multi' ? 0 : (val ?? 1); 
                                         }
@@ -566,7 +557,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = (props) => {
                                         return val === 'multi' ? 0 : (val ?? 1);
                                     })()}
                                     onChange={val => {
-                                        if (isEditingImage && !isEditingAnnotation && !isDrawing && activeColorTarget === 'outline') {
+                                        if (isEditingImage && !isEditingAnnotation && activeColorTarget === 'outline') {
                                              onUpdateSelectedImages({ outlineOpacity: val });
                                              return;
                                         }

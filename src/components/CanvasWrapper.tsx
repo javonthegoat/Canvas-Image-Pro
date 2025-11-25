@@ -14,7 +14,7 @@ interface CanvasWrapperProps {
   selectedImageIds: string[];
   setSelectedImageId: (id: string | null, options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   onSelectImages: (ids: string[], keepExisting: boolean) => void;
-  onBoxSelect: (imageIds: string[], annotationSelections: AnnotationSelection[], keepExisting: boolean) => void;
+  onBoxSelect: (imageIds: string[], annotationSelections: AnnotationSelection[], options: { shiftKey: boolean, ctrlKey: boolean }) => void;
   cropArea: Rect | null;
   setCropArea: React.Dispatch<React.SetStateAction<Rect | null>>;
   aspectRatio: AspectRatio;
@@ -52,7 +52,7 @@ type InteractionState =
   | { mode: 'annotating'; startPoint: Point; shiftKey: boolean }
   | { mode: 'move-crop'; startPoint: Point; initialCropArea: Rect }
   | { mode: 'move-annotation'; startPoint: Point }
-  | { mode: 'marquee-select'; startPoint: Point; shiftKey: boolean }
+  | { mode: 'marquee-select'; startPoint: Point; shiftKey: boolean; ctrlKey: boolean }
   | { mode: 'scale-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startScale: number; startDist: number; }
   | { mode: 'rotate-annotation'; startPoint: Point; center: Point; annotationId: string; imageId: string | null; startRotation: number; startAngle: number; }
   | { mode: 'resize-arrow-start'; startPoint: Point; annotationId: string; imageId: string | null; }
@@ -588,7 +588,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
     if (activeTool === 'select') {
       const clickedAnnotation = findAnnotationAtPoint(canvasPoint);
       if (clickedAnnotation) {
-          const isMultiSelect = e.shiftKey;
+          const isMultiSelect = e.shiftKey || e.ctrlKey || e.metaKey;
           
           if (!isMultiSelect) {
               setSelectedImageId(null, { shiftKey: false, ctrlKey: false });
@@ -625,7 +625,9 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
         }
         setInteraction({ mode: 'move', startPoint: canvasPoint });
       } else {
-        setInteraction({ mode: 'marquee-select', startPoint: canvasPoint, shiftKey: e.shiftKey });
+        const isMultiSelect = e.shiftKey;
+        const isSubtractSelect = e.ctrlKey || e.metaKey;
+        setInteraction({ mode: 'marquee-select', startPoint: canvasPoint, shiftKey: isMultiSelect, ctrlKey: isSubtractSelect });
         setMarqueeRect({ x: canvasPoint.x, y: canvasPoint.y, width: 0, height: 0 });
       }
     }
@@ -873,7 +875,7 @@ export const CanvasWrapper = forwardRef<HTMLCanvasElement, CanvasWrapperProps>((
                 selectedAnnos.push({ imageId: null, annotationId: anno.id });
             }
         });
-        onBoxSelect(selectedImages, selectedAnnos, interaction.shiftKey);
+        onBoxSelect(selectedImages, selectedAnnos, { shiftKey: interaction.shiftKey, ctrlKey: interaction.ctrlKey });
     }
 
     if (!historyPushed) {
