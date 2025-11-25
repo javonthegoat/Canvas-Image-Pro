@@ -760,6 +760,19 @@ const App: React.FC = () => {
       return () => window.removeEventListener('keydown', handleKeyDown);
     }, [selectedImageIds, selectedAnnotations, selectedLayerId, groups, deleteSelectedImages, deleteSelectedAnnotations, deleteGroup, handleCopyToClipboard, handleUndo, handleRedo, cropArea, setActiveTool, handleApplyCrop]);
 
+    useEffect(() => {
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            const hasContent = images.length > 0 || groups.length > 0 || canvasAnnotations.length > 0;
+            if (hasContent) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [images, groups, canvasAnnotations]);
+
     // Derived props for components
     const selectedAnnotationObjects = useMemo(() => {
         const objects: Annotation[] = [];
